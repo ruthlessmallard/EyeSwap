@@ -26,7 +26,7 @@ class MediaController {
       await intent.launch();
       
       // Wait for app to come to foreground
-      await Future.delayed(const Duration(milliseconds: 1200));
+      await Future.delayed(const Duration(milliseconds: 1500));
       await _sendMediaPlay();
     } catch (e) {
       developer.log('Error launching YT Music: $e, trying fallback', name: 'SwitchBox');
@@ -42,7 +42,7 @@ class MediaController {
         flags: [Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_CLEAR_TOP],
       );
       await intent.launch();
-      await Future.delayed(const Duration(milliseconds: 1200));
+      await Future.delayed(const Duration(milliseconds: 1500));
       await _sendMediaPlay();
     } catch (e) {
       developer.log('Fallback also failed: $e', name: 'SwitchBox');
@@ -54,18 +54,36 @@ class MediaController {
     developer.log('Launching Audible', name: 'SwitchBox');
     
     try {
+      // Try with explicit component name first
+      final intent = AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: audiblePackage,
+        componentName: '$audiblePackage/.MainActivity',
+        flags: [Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_CLEAR_TOP],
+      );
+      await intent.launch();
+      
+      // Audible needs more time to initialize
+      await Future.delayed(const Duration(milliseconds: 2000));
+      await _sendMediaPlay();
+    } catch (e) {
+      developer.log('Component launch failed: $e, trying package only', name: 'SwitchBox');
+      _fallbackLaunchAudible();
+    }
+  }
+  
+  void _fallbackLaunchAudible() async {
+    try {
       final intent = AndroidIntent(
         action: 'android.intent.action.MAIN',
         package: audiblePackage,
         flags: [Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_CLEAR_TOP],
       );
       await intent.launch();
-      
-      // Audible needs more time to initialize
-      await Future.delayed(const Duration(milliseconds: 1500));
+      await Future.delayed(const Duration(milliseconds: 2000));
       await _sendMediaPlay();
     } catch (e) {
-      developer.log('Error launching Audible: $e', name: 'SwitchBox');
+      developer.log('Fallback also failed: $e', name: 'SwitchBox');
     }
   }
 
@@ -79,13 +97,13 @@ class MediaController {
     }
   }
 
-  /// Send play command
+  /// Send play command - toggles twice to ensure play state
   Future<void> _sendMediaPlay() async {
     developer.log('Sending PLAY command', name: 'SwitchBox');
     try {
       // Send playPause twice to ensure toggle to play state
       await _channel.invokeMethod('playPause');
-      await Future.delayed(const Duration(milliseconds: 200));
+      await Future.delayed(const Duration(milliseconds: 300));
       await _channel.invokeMethod('playPause');
     } catch (e) {
       developer.log('Error sending play: $e', name: 'SwitchBox');
