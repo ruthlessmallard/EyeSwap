@@ -12,7 +12,6 @@ dependencies:
   cupertino_icons: ^1.0.6
   audioplayers: ^5.2.1
   permission_handler: ^11.0.1
-  device_apps: ^2.2.0
   android_intent_plus: ^4.0.3
 
 dev_dependencies:
