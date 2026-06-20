@@ -29,13 +29,16 @@ jobs:
     - name: Get dependencies
       run: flutter pub get
     
+    - name: Setup Android
+      run: |
+        flutter config --enable-android
+        echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
+    
     - name: Analyze
       run: flutter analyze --no-fatal-infos
     
     - name: Build APK
-      run: |
-        flutter config --enable-android
-        flutter build apk --release
+      run: flutter build apk --release
     
     - name: Upload APK
       uses: actions/upload-artifact@v4
