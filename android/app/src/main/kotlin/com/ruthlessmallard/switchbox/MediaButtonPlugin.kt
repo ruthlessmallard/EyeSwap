@@ -147,7 +147,7 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                         val sessions = audioManager.activePlaybackConfigurations
                         
                         for (config in sessions) {
-                            if (config.clientPackageName == "com.audible.application") {
+                            if (config.packageName == "com.audible.application") {
                                 audibleActive = true
                                 android.util.Log.d("SwitchBox", "Audible detected as active media session after ${attempts * 500}ms")
                                 break
