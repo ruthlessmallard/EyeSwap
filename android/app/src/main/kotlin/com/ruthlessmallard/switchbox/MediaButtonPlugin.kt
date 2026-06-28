@@ -78,6 +78,10 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 "launchAudible" -> {
                     launchAudible(result)
                 }
+                "launchAndPlayAudible" -> {
+                    val delayMs = call.argument<Int>("delayMs") ?: 4500
+                    launchAndPlayAudible(result, delayMs)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -101,6 +105,92 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
             }
         } catch (e: Exception) {
             android.util.Log.e("SwitchBox", "Failed to launch Audible: ${e.message}")
+            result.error("LAUNCH_FAILED", "Failed to launch Audible: ${e.message}", null)
+        }
+    }
+
+    private fun launchAndPlayAudible(result: MethodChannel.Result, delayMs: Int) {
+        try {
+            val packageManager = context.packageManager
+            val launchIntent = packageManager.getLaunchIntentForPackage("com.audible.application")
+            
+            if (launchIntent == null) {
+                android.util.Log.w("SwitchBox", "Audible not installed")
+                result.success(false)
+                return
+            }
+            
+            // Add FLAG_ACTIVITY_NEW_TASK since we're starting from a non-Activity context
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(launchIntent)
+            android.util.Log.d("SwitchBox", "Audible launched, waiting ${delayMs}ms for initialization")
+            
+            // Use a background thread for the delay to avoid blocking the main thread
+            Thread {
+                try {
+                    // Wait for Audible to fully initialize
+                    Thread.sleep(delayMs.toLong())
+                    
+                    // Now send play command specifically targeting Audible
+                    // Method 1: Try to start Audible's media session explicitly by using an ACTION_MEDIA_BUTTON broadcast
+                    // targeted at the Audible package
+                    val playKeyCode = KeyEvent.KEYCODE_MEDIA_PLAY
+                    
+                    // Send broadcast for PLAY that Android's media framework will route to the active session
+                    // We need to try to make Audible the active session first
+                    try {
+                        // First, try to trigger Audible's media session by sending a broadcast that should wake it
+                        val downIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                            setPackage("com.audible.application")
+                            putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, playKeyCode))
+                        }
+                        val upIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                            setPackage("com.audible.application")
+                            putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_UP, playKeyCode))
+                        }
+                        
+                        context.sendBroadcast(downIntent)
+                        Thread.sleep(50)
+                        context.sendBroadcast(upIntent)
+                        
+                        android.util.Log.d("SwitchBox", "Targeted play broadcast sent to Audible")
+                    } catch (e: Exception) {
+                        android.util.Log.e("SwitchBox", "Targeted broadcast failed: ${e.message}")
+                    }
+                    
+                    // Small additional delay then try non-targeted to ensure it catches
+                    Thread.sleep(200)
+                    
+                    // Method 2: Use dispatchMediaKeyEvent which routes to the active media session
+                    // Hopefully Audible is now active
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                        try {
+                            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                            
+                            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, playKeyCode))
+                            Thread.sleep(50)
+                            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, playKeyCode))
+                            
+                            android.util.Log.d("SwitchBox", "dispatchMediaKeyEvent PLAY sent")
+                        } catch (e: Exception) {
+                            android.util.Log.e("SwitchBox", "dispatchMediaKeyEvent failed: ${e.message}")
+                        }
+                    }
+                    
+                    // Return to main thread for result
+                    Handler(Looper.getMainLooper()).post {
+                        result.success(true)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SwitchBox", "Play command failed: ${e.message}")
+                    Handler(Looper.getMainLooper()).post {
+                        result.success(false)
+                    }
+                }
+            }.start()
+            
+        } catch (e: Exception) {
+            android.util.Log.e("SwitchBox", "Failed to launch and play Audible: ${e.message}")
             result.error("LAUNCH_FAILED", "Failed to launch Audible: ${e.message}", null)
         }
     }

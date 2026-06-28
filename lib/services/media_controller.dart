@@ -50,23 +50,24 @@ class MediaController {
   }
 
   /// Launch Audible and start playing using native platform channel
-  Future<void> launchAudible() async {
-    developer.log('Launching Audible via native platform channel', name: 'SwitchBox');
+  /// Uses native launchAndPlayAudible with configurable delay
+  Future<bool> launchAudible({int delayMs = 4500}) async {
+    developer.log('Launching Audible via native platform channel (delay: ${delayMs}ms)', name: 'SwitchBox');
 
     try {
-      // Use native platform channel to launch Audible directly
-      final result = await _channel.invokeMethod('launchAudible');
+      // Use native platform channel to launch Audible AND play with proper timing
+      final result = await _channel.invokeMethod('launchAndPlayAudible', {'delayMs': delayMs});
       
       if (result == true) {
-        developer.log('Audible launched successfully', name: 'SwitchBox');
-        // Audible needs more time to initialize
-        await Future.delayed(const Duration(milliseconds: 3000));
-        await _sendMediaPlay();
+        developer.log('Audible launched and play sent successfully', name: 'SwitchBox');
+        return true;
       } else {
-        developer.log('Audible not installed', name: 'SwitchBox');
+        developer.log('Audible not installed or play failed', name: 'SwitchBox');
+        return false;
       }
     } catch (e) {
-      developer.log('Audible launch failed: $e', name: 'SwitchBox');
+      developer.log('Audible launch/play failed: $e', name: 'SwitchBox');
+      return false;
     }
   }
 
