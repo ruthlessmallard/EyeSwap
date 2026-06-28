@@ -52,22 +52,22 @@ class MediaController {
   /// Launch Audible and start playing
   Future<void> launchAudible() async {
     developer.log('Launching Audible', name: 'SwitchBox');
-    
+
     try {
-      // Audible uses .MainLauncher, not .MainActivity
+      // Use standard MAIN/LAUNCHER intent - let Android resolve the activity
       final intent = AndroidIntent(
         action: 'android.intent.action.MAIN',
+        category: 'android.intent.category.LAUNCHER',
         package: audiblePackage,
-        componentName: '$audiblePackage/.MainLauncher',
         flags: [Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_CLEAR_TOP],
       );
       await intent.launch();
-      
+
       // Audible needs more time to initialize
       await Future.delayed(const Duration(milliseconds: 3000));
       await _sendMediaPlay();
     } catch (e) {
-      developer.log('Component launch failed: $e', name: 'SwitchBox');
+      developer.log('Audible launch failed: $e', name: 'SwitchBox');
     }
   }
 
