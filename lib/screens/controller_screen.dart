@@ -3,6 +3,7 @@ import '../widgets/round_display.dart';
 import '../widgets/chunky_button.dart';
 import '../services/media_controller.dart';
 import '../services/spen_handler.dart';
+import 'diagnostic_screen.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -92,9 +93,27 @@ class _ControllerScreenState extends State<ControllerScreen> {
     _mediaController.acceptCall();
   }
 
+  void _openDiagnostic() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const DiagnosticScreen()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bug_report, color: Colors.white70),
+            onPressed: _openDiagnostic,
+            tooltip: 'Diagnostic Mode',
+          ),
+        ],
+      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(

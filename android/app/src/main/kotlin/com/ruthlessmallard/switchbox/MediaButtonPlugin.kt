@@ -1,10 +1,14 @@
 package com.ruthlessmallard.switchbox
 
 import android.app.ActivityManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
+import android.media.session.MediaController
 import android.media.session.MediaSession
+import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Handler
@@ -13,6 +17,9 @@ import android.view.KeyEvent
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCallHandler {
     companion object {
@@ -88,6 +95,21 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 "playPauseYT" -> {
                     val keyCode = call.argument<Int>("keyCode") ?: KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
                     sendMediaButtonToPackage(keyCode, "com.google.android.apps.youtube.music")
+                    result.success(null)
+                }
+                "startRecording" -> {
+                    MediaDiagnosticRecorder.getInstance(context).startRecording()
+                    result.success(true)
+                }
+                "stopRecording" -> {
+                    MediaDiagnosticRecorder.getInstance(context).stopRecording()
+                    result.success(MediaDiagnosticRecorder.getInstance(context).getLog())
+                }
+                "getLog" -> {
+                    result.success(MediaDiagnosticRecorder.getInstance(context).getLog())
+                }
+                "clearLog" -> {
+                    MediaDiagnosticRecorder.getInstance(context).clearLog()
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -270,6 +292,208 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
         } catch (e: Exception) {
             android.util.Log.e("SwitchBox", "Failed to launch YouTube Music: ${e.message}")
             result.error("LAUNCH_FAILED", "Failed to launch YouTube Music: ${e.message}", null)
+        }
+    }
+}
+
+/**
+ * MediaDiagnosticRecorder - Singleton for recording media button events and session state changes
+ * for diagnostic purposes.
+ */
+class MediaDiagnosticRecorder private constructor(private val context: Context) {
+    
+    private val logList = mutableListOf<String>()
+    private var isRecording = false
+    private val maxLogSize = 100
+    private var mediaSessionManager: MediaSessionManager? = null
+    private var activeControllers: List<MediaController>? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val pollRunnable = Runnable { pollActiveSessions() }
+    private val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    
+    companion object {
+        @Volatile
+        private var instance: MediaDiagnosticRecorder? = null
+        
+        fun getInstance(context: Context): MediaDiagnosticRecorder {
+            return instance ?: synchronized(this) {
+                instance ?: MediaDiagnosticRecorder(context.applicationContext).also {
+                    instance = it
+                }
+            }
+        }
+    }
+    
+    private val mediaButtonReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            if (!isRecording) return
+            
+            intent?.let { 
+                val action = it.action
+                if (action == Intent.ACTION_MEDIA_BUTTON || action == "android.media.MEDIA_KEY_EVENT") {
+                    val keyEvent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        it.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        it.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+                    }
+                    
+                    keyEvent?.let { event ->
+                        // Only log on ACTION_UP to avoid duplicates
+                        if (event.action == KeyEvent.ACTION_UP) {
+                            val keyName = getKeyEventName(event.keyCode)
+                            val sourcePackage = it.`package` ?: "unknown"
+                            addLog("MEDIA_BUTTON from $sourcePackage: $keyName")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    fun startRecording() {
+        if (isRecording) return
+        
+        isRecording = true
+        logList.clear()
+        addLog("Recording started")
+        
+        // Register media button receiver
+        try {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_MEDIA_BUTTON)
+                addAction("android.media.MEDIA_KEY_EVENT")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(mediaButtonReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                context.registerReceiver(mediaButtonReceiver, filter)
+            }
+        } catch (e: Exception) {
+            addLog("ERROR: Failed to register receiver: ${e.message}")
+        }
+        
+        // Initialize MediaSessionManager for polling
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                mediaSessionManager = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
+                // Get initial controllers
+                activeControllers = mediaSessionManager?.getActiveSessions(null)
+                // Start polling
+                pollActiveSessions()
+            } catch (e: Exception) {
+                addLog("ERROR: MediaSessionManager failed: ${e.message}")
+            }
+        }
+    }
+    
+    fun stopRecording(): List<String> {
+        isRecording = false
+        
+        // Unregister receiver
+        try {
+            context.unregisterReceiver(mediaButtonReceiver)
+        } catch (e: Exception) {
+            // Receiver may not be registered
+        }
+        
+        // Stop polling
+        handler.removeCallbacks(pollRunnable)
+        
+        addLog("Recording stopped")
+        return getLog()
+    }
+    
+    fun getLog(): List<String> {
+        return logList.toList()
+    }
+    
+    fun clearLog() {
+        logList.clear()
+    }
+    
+    private fun addLog(message: String) {
+        val timestamp = dateFormat.format(Date())
+        val logEntry = "[$timestamp] $message"
+        logList.add(logEntry)
+        
+        // Keep only last 100 entries
+        while (logList.size > maxLogSize) {
+            logList.removeAt(0)
+        }
+    }
+    
+    private fun pollActiveSessions() {
+        if (!isRecording) return
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val currentControllers = mediaSessionManager?.getActiveSessions(null)
+                
+                // Track session changes
+                val prevPackages = activeControllers?.map { it.packageName }?.toSet() ?: emptySet()
+                val currentPackages = currentControllers?.map { it.packageName }?.toSet() ?: emptySet()
+                
+                // New sessions
+                for (controller in currentControllers ?: emptyList()) {
+                    if (controller.packageName !in prevPackages) {
+                        val state = controller.playbackState?.let { getPlaybackStateName(it.state) } ?: "UNKNOWN"
+                        addLog("SESSION_CHANGED: ${controller.packageName} - $state (new)")
+                    } else {
+                        // Check for state changes in existing sessions
+                        val prevController = activeControllers?.find { it.packageName == controller.packageName }
+                        val prevState = prevController?.playbackState?.let { getPlaybackStateName(it.state) }
+                        val currentState = controller.playbackState?.let { getPlaybackStateName(it.state) }
+                        
+                        if (prevState != currentState && currentState != null) {
+                            addLog("SESSION_CHANGED: ${controller.packageName} - $currentState")
+                        }
+                    }
+                }
+                
+                // Sessions that stopped
+                for (packageName in prevPackages - currentPackages) {
+                    addLog("SESSION_CHANGED: $packageName - STOPPED")
+                }
+                
+                activeControllers = currentControllers
+            } catch (e: Exception) {
+                // Silent fail during polling
+            }
+        }
+        
+        // Schedule next poll in 500ms
+        handler.postDelayed(pollRunnable, 500)
+    }
+    
+    private fun getPlaybackStateName(state: Int): String {
+        return when (state) {
+            PlaybackState.STATE_PLAYING -> "PLAYING"
+            PlaybackState.STATE_PAUSED -> "PAUSED"
+            PlaybackState.STATE_STOPPED -> "STOPPED"
+            PlaybackState.STATE_BUFFERING -> "BUFFERING"
+            PlaybackState.STATE_CONNECTING -> "CONNECTING"
+            PlaybackState.STATE_ERROR -> "ERROR"
+            PlaybackState.STATE_FAST_FORWARDING -> "FAST_FORWARDING"
+            PlaybackState.STATE_REWINDING -> "REWINDING"
+            PlaybackState.STATE_SKIPPING_TO_NEXT -> "SKIPPING_TO_NEXT"
+            PlaybackState.STATE_SKIPPING_TO_PREVIOUS -> "SKIPPING_TO_PREVIOUS"
+            PlaybackState.STATE_NONE -> "NONE"
+            else -> "STATE_$state"
+        }
+    }
+    
+    private fun getKeyEventName(keyCode: Int): String {
+        return when (keyCode) {
+            KeyEvent.KEYCODE_MEDIA_PLAY -> "PLAY"
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> "PAUSE"
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> "PLAY_PAUSE"
+            KeyEvent.KEYCODE_MEDIA_STOP -> "STOP"
+            KeyEvent.KEYCODE_MEDIA_NEXT -> "NEXT"
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "PREVIOUS"
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> "FAST_FORWARD"
+            KeyEvent.KEYCODE_MEDIA_REWIND -> "REWIND"
+            else -> "KEY_CODE_$keyCode"
         }
     }
 }
