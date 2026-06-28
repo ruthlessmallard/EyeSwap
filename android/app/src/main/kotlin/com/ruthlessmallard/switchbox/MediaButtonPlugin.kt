@@ -1,15 +1,20 @@
 package com.ruthlessmallard.switchbox
 
 import android.annotation.TargetApi
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.media.browse.MediaBrowser
+import android.media.session.MediaController
 import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.service.media.MediaBrowserService
 import android.view.KeyEvent
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -83,6 +88,9 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 "launchAndPlayAudible" -> {
                     val delayMs = call.argument<Int>("delayMs") ?: 4500
                     launchAndPlayAudible(result, delayMs)
+                }
+                "connectAndPlayAudible" -> {
+                    connectAndPlayAudible(result)
                 }
                 else -> result.notImplemented()
             }
@@ -265,6 +273,103 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
             } catch (e: Exception) {
                 android.util.Log.e("SwitchBox", "Broadcast failed: ${e.message}")
             }
+        }
+    }
+
+    @TargetApi(21)
+    private fun connectAndPlayAudible(result: MethodChannel.Result) {
+        // MediaBrowser requires API 21+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            android.util.Log.w("SwitchBox", "connectAndPlayAudible requires API 21+, falling back to launchAndPlayAudible")
+            launchAndPlayAudible(result, 4500)
+            return
+        }
+
+        try {
+            // First check if Audible is installed
+            val packageManager = context.packageManager
+            val launchIntent = packageManager.getLaunchIntentForPackage("com.audible.application")
+            
+            if (launchIntent == null) {
+                android.util.Log.w("SwitchBox", "Audible not installed")
+                result.success("not_installed")
+                return
+            }
+
+            var connectionTimedOut = false
+            val connectionTimeoutHandler = Handler(Looper.getMainLooper())
+            
+            val connectionCallbacks = object : MediaBrowser.ConnectionCallback() {
+                override fun onConnected() {
+                    // Cancel timeout
+                    connectionTimeoutHandler.removeCallbacksAndMessages(null)
+                    
+                    if (connectionTimedOut) {
+                        android.util.Log.w("SwitchBox", "MediaBrowser connected after timeout")
+                        return
+                    }
+                    
+                    try {
+                        val sessionToken = browser.sessionToken
+                        val controller = MediaController(context, sessionToken)
+                        
+                        android.util.Log.d("SwitchBox", "MediaBrowser connected to Audible, sending play command")
+                        controller.transportControls.play()
+                        
+                        // Disconnect after sending command
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            browser.disconnect()
+                        }, 1000)
+                        
+                        result.success("connected_and_played")
+                    } catch (e: Exception) {
+                        android.util.Log.e("SwitchBox", "Failed to get MediaController or send play: ${e.message}")
+                        browser.disconnect()
+                        // Fallback to old method
+                        launchAndPlayAudible(result, 4500)
+                    }
+                }
+
+                override fun onConnectionSuspended() {
+                    android.util.Log.w("SwitchBox", "MediaBrowser connection suspended")
+                }
+
+                override fun onConnectionFailed() {
+                    connectionTimeoutHandler.removeCallbacksAndMessages(null)
+                    android.util.Log.w("SwitchBox", "MediaBrowser connection failed, falling back to launchAndPlayAudible")
+                    // Fallback to old method
+                    launchAndPlayAudible(result, 4500)
+                }
+            }
+
+            // Create MediaBrowser connection to Audible's MediaBrowserService
+            val browser = MediaBrowser(
+                context,
+                ComponentName("com.audible.application", "com.audible.application.media.AudibleMediaBrowserService"),
+                connectionCallbacks,
+                null
+            )
+
+            // Set 10 second timeout
+            connectionTimeoutHandler.postDelayed({
+                connectionTimedOut = true
+                try {
+                    browser.disconnect()
+                } catch (e: Exception) {
+                    // Ignore
+                }
+                android.util.Log.w("SwitchBox", "MediaBrowser connection timeout, falling back to launchAndPlayAudible")
+                // Fallback to old method
+                launchAndPlayAudible(result, 4500)
+            }, 10000)
+
+            android.util.Log.d("SwitchBox", "Connecting to Audible MediaBrowserService...")
+            browser.connect()
+
+        } catch (e: Exception) {
+            android.util.Log.e("SwitchBox", "Failed to setup MediaBrowser connection: ${e.message}")
+            // Fallback to old method
+            launchAndPlayAudible(result, 4500)
         }
     }
 }

@@ -49,31 +49,30 @@ class MediaController {
     }
   }
 
-  /// Launch Audible and start playing using native platform channel
-  /// Uses native launchAndPlayAudible with configurable delay
+  /// Launch Audible and resume last book using MediaBrowser connection
+  /// Falls back to launchAndPlayAudible if MediaBrowser fails
   Future<bool> launchAudible({int delayMs = 4500}) async {
-    developer.log('Launching Audible via native platform channel (delay: ${delayMs}ms)', name: 'SwitchBox');
+    developer.log('Launching Audible via MediaBrowser connection', name: 'SwitchBox');
 
     try {
-      // Use native platform channel to launch Audible AND play with proper timing
-      final result = await _channel.invokeMethod('launchAndPlayAudible', {'delayMs': delayMs});
+      // Try new MediaBrowser connection method first (proper Android media framework)
+      final result = await _channel.invokeMethod('connectAndPlayAudible');
       
-      // Handle status string returns from native side
-      if (result == 'audible_active_played') {
-        developer.log('Audible launched, session detected, play sent', name: 'SwitchBox');
+      if (result == 'connected_played') {
+        developer.log('Audible connected via MediaBrowser, play sent', name: 'SwitchBox');
         return true;
-      } else if (result == 'timeout_played') {
-        developer.log('Audible launched, timeout waiting for session, play sent anyway', name: 'SwitchBox');
+      } else if (result == 'fallback_launched') {
+        developer.log('MediaBrowser failed, fell back to launchAndPlayAudible', name: 'SwitchBox');
         return true;
       } else if (result == 'failed') {
         developer.log('Audible not installed', name: 'SwitchBox');
         return false;
       } else {
-        developer.log('Audible launch/play returned: $result', name: 'SwitchBox');
+        developer.log('Audible launch returned: $result', name: 'SwitchBox');
         return false;
       }
     } catch (e) {
-      developer.log('Audible launch/play failed: $e', name: 'SwitchBox');
+      developer.log('Audible MediaBrowser connection failed: $e', name: 'SwitchBox');
       return false;
     }
   }
