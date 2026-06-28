@@ -51,14 +51,14 @@ class MediaController {
 
   /// Send play command - toggles twice to ensure play state
   Future<void> _sendMediaPlay() async {
-    developer.log('Sending PLAY command', name: 'SwitchBox');
+    developer.log('Sending PLAY command to YouTube Music', name: 'SwitchBox');
     try {
-      // Send playPause twice to ensure toggle to play state
-      await _channel.invokeMethod('playPause');
+      // Send targeted playPause to YT Music twice to ensure toggle to play state
+      await _channel.invokeMethod('playPauseYT');
       await Future.delayed(const Duration(milliseconds: 300));
-      await _channel.invokeMethod('playPause');
+      await _channel.invokeMethod('playPauseYT');
     } catch (e) {
-      developer.log('Error sending play: $e', name: 'SwitchBox');
+      developer.log('Error sending play to YT Music: $e', name: 'SwitchBox');
     }
   }
 

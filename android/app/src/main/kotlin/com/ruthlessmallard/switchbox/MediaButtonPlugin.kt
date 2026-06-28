@@ -90,6 +90,11 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 "launchYouTubeMusic" -> {
                     launchYouTubeMusicNative(result)
                 }
+                "playPauseYT" -> {
+                    val keyCode = call.argument<Int>("keyCode") ?: KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                    sendMediaButtonToPackage(keyCode, "com.google.android.apps.youtube.music")
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -313,6 +318,25 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
         } catch (e: Exception) {
             android.util.Log.e("SwitchBox", "Failed to launch and simulate headset: ${e.message}")
             result.error("LAUNCH_FAILED", "Failed to launch Audible: ${e.message}", null)
+        }
+    }
+
+    private fun sendMediaButtonToPackage(keyCode: Int, packageName: String) {
+        try {
+            val downIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                setPackage(packageName)
+                putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            }
+            val upIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                setPackage(packageName)
+                putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_UP, keyCode))
+            }
+            context.sendBroadcast(downIntent)
+            Thread.sleep(50)
+            context.sendBroadcast(upIntent)
+            android.util.Log.d("SwitchBox", "Media key sent to $packageName: $keyCode")
+        } catch (e: Exception) {
+            android.util.Log.e("SwitchBox", "Failed to send media key to $packageName: ${e.message}")
         }
     }
 
