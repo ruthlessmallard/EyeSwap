@@ -302,14 +302,6 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 
                 android.util.Log.d("SwitchBox", "Headset PLAY button simulated")
                 
-                // Also try PLAY_PAUSE as fallback
-                Thread.sleep(500)
-                audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
-                Thread.sleep(50)
-                audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
-                
-                android.util.Log.d("SwitchBox", "Headset PLAY_PAUSE button simulated")
-                
                 Handler(Looper.getMainLooper()).post {
                     result.success("launched_and_simulated")
                 }
