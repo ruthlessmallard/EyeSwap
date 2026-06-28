@@ -1,7 +1,5 @@
 import 'dart:developer' as developer;
 import 'package:flutter/services.dart';
-import 'package:android_intent_plus/android_intent.dart';
-import 'package:android_intent_plus/flag.dart';
 import 'voice_assistant.dart';
 
 class MediaController {
@@ -14,51 +12,21 @@ class MediaController {
 
   /// Launch YouTube Music and start playing
   Future<void> launchYouTubeMusic() async {
-    developer.log('Launching YouTube Music', name: 'SwitchBox');
+    developer.log('Launching YouTube Music via native platform channel', name: 'SwitchBox');
 
     try {
-      // Try launching with VIEW intent first (more reliable)
-      final intent = AndroidIntent(
-        action: 'android.intent.action.VIEW',
-        data: 'vnd.youtube.music://',
-        flags: [Flag.FLAG_ACTIVITY_NEW_TASK],
-      );
-      await intent.launch();
+      // Use native platform channel - launch + targeted play in one call
+      final result = await _channel.invokeMethod('launchYouTubeMusic');
 
-      // Wait for app to come to foreground
-      await Future.delayed(const Duration(milliseconds: 1500));
-      await _sendMediaPlay();
+      if (result == 'launched_and_played') {
+        developer.log('YouTube Music launched and play sent', name: 'SwitchBox');
+      } else if (result == 'not_installed') {
+        developer.log('YouTube Music not installed', name: 'SwitchBox');
+      } else {
+        developer.log('YouTube Music launch returned: $result', name: 'SwitchBox');
+      }
     } catch (e) {
-      developer.log('Error launching YT Music: $e, trying fallback', name: 'SwitchBox');
-      _fallbackLaunchYT();
-    }
-  }
-
-  void _fallbackLaunchYT() async {
-    try {
-      final intent = AndroidIntent(
-        action: 'android.intent.action.MAIN',
-        package: youtubeMusicPackage,
-        flags: [Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_CLEAR_TOP],
-      );
-      await intent.launch();
-      await Future.delayed(const Duration(milliseconds: 1500));
-      await _sendMediaPlay();
-    } catch (e) {
-      developer.log('Fallback also failed: $e', name: 'SwitchBox');
-    }
-  }
-
-  /// Send play command - toggles twice to ensure play state
-  Future<void> _sendMediaPlay() async {
-    developer.log('Sending PLAY command to YouTube Music', name: 'SwitchBox');
-    try {
-      // Send targeted playPause to YT Music twice to ensure toggle to play state
-      await _channel.invokeMethod('playPauseYT');
-      await Future.delayed(const Duration(milliseconds: 300));
-      await _channel.invokeMethod('playPauseYT');
-    } catch (e) {
-      developer.log('Error sending play to YT Music: $e', name: 'SwitchBox');
+      developer.log('Error launching YT Music: $e', name: 'SwitchBox');
     }
   }
 
