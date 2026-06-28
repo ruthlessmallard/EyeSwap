@@ -54,10 +54,9 @@ class MediaController {
     developer.log('Launching Audible', name: 'SwitchBox');
 
     try {
-      // Use standard MAIN/LAUNCHER intent - let Android resolve the activity
+      // Launch Audible by package name only - avoid category to prevent disambiguation popup
       final intent = AndroidIntent(
         action: 'android.intent.action.MAIN',
-        category: 'android.intent.category.LAUNCHER',
         package: audiblePackage,
         flags: [Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_CLEAR_TOP],
       );
