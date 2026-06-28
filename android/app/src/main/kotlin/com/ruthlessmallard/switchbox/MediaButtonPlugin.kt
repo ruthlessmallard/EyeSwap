@@ -75,8 +75,33 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                     sendMediaButton(KeyEvent.KEYCODE_MEDIA_REWIND)
                     result.success(null)
                 }
+                "launchAudible" -> {
+                    launchAudible(result)
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    private fun launchAudible(result: MethodChannel.Result) {
+        try {
+            val packageManager = context.packageManager
+            val launchIntent = packageManager.getLaunchIntentForPackage("com.audible.application")
+            
+            if (launchIntent != null) {
+                // Add FLAG_ACTIVITY_NEW_TASK since we're starting from a non-Activity context
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launchIntent)
+                result.success(true)
+                android.util.Log.d("SwitchBox", "Audible launched successfully")
+            } else {
+                // Audible not installed
+                result.success(false)
+                android.util.Log.w("SwitchBox", "Audible not installed")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SwitchBox", "Failed to launch Audible: ${e.message}")
+            result.error("LAUNCH_FAILED", "Failed to launch Audible: ${e.message}", null)
         }
     }
 

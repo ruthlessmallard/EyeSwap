@@ -49,22 +49,22 @@ class MediaController {
     }
   }
 
-  /// Launch Audible and start playing
+  /// Launch Audible and start playing using native platform channel
   Future<void> launchAudible() async {
-    developer.log('Launching Audible', name: 'SwitchBox');
+    developer.log('Launching Audible via native platform channel', name: 'SwitchBox');
 
     try {
-      // Launch Audible by package name only - avoid category to prevent disambiguation popup
-      final intent = AndroidIntent(
-        action: 'android.intent.action.MAIN',
-        package: audiblePackage,
-        flags: [Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_CLEAR_TOP],
-      );
-      await intent.launch();
-
-      // Audible needs more time to initialize
-      await Future.delayed(const Duration(milliseconds: 3000));
-      await _sendMediaPlay();
+      // Use native platform channel to launch Audible directly
+      final result = await _channel.invokeMethod('launchAudible');
+      
+      if (result == true) {
+        developer.log('Audible launched successfully', name: 'SwitchBox');
+        // Audible needs more time to initialize
+        await Future.delayed(const Duration(milliseconds: 3000));
+        await _sendMediaPlay();
+      } else {
+        developer.log('Audible not installed', name: 'SwitchBox');
+      }
     } catch (e) {
       developer.log('Audible launch failed: $e', name: 'SwitchBox');
     }
