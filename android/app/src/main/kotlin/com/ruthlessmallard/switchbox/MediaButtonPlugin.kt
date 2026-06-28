@@ -1,5 +1,6 @@
 package com.ruthlessmallard.switchbox
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
@@ -116,8 +117,22 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
         }
     }
 
+    private fun killApp(packageName: String) {
+        try {
+            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            activityManager.killBackgroundProcesses(packageName)
+            android.util.Log.d("SwitchBox", "Killed $packageName")
+        } catch (e: Exception) {
+            android.util.Log.e("SwitchBox", "Failed to kill $packageName: ${e.message}")
+        }
+    }
+
     private fun launchAndPlayAudible(result: MethodChannel.Result) {
         try {
+            // Kill YT Music to clear active media session
+            killApp("com.google.android.apps.youtube.music")
+            Thread.sleep(500)
+            
             // Check if Audible is installed
             val packageManager = context.packageManager
             val launchIntent = packageManager.getLaunchIntentForPackage("com.audible.application")
@@ -219,6 +234,10 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
 
     private fun launchYouTubeMusicNative(result: MethodChannel.Result) {
         try {
+            // Kill Audible to clear active media session
+            killApp("com.audible.application")
+            Thread.sleep(500)
+            
             // Check if YouTube Music is installed
             val packageManager = context.packageManager
             val launchIntent = packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.music")
