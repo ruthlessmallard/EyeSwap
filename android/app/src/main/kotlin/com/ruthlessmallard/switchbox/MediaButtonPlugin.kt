@@ -351,13 +351,15 @@ class MediaDiagnosticRecorder private constructor(private val context: Context) 
         }
         
         try {
-            val filter = IntentFilter(Intent.ACTION_MEDIA_BUTTON)
+            val filter = IntentFilter(Intent.ACTION_MEDIA_BUTTON).apply {
+                priority = 999  // High priority to receive before media apps
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 context.registerReceiver(mediaButtonReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 context.registerReceiver(mediaButtonReceiver, filter)
             }
-            addLog("Receiver registered for ACTION_MEDIA_BUTTON")
+            addLog("Receiver registered for ACTION_MEDIA_BUTTON with priority 999")
         } catch (e: Exception) {
             addLog("ERROR: Failed to register receiver: ${e.message}")
         }
