@@ -16,22 +16,16 @@ class MediaController {
     developer.log('Launching YouTube Music', name: 'SwitchBox');
 
     try {
-      // Step 1: Launch YouTube Music via VIEW intent (android_intent_plus)
-      final intent = AndroidIntent(
-        action: 'android.intent.action.VIEW',
-        package: youtubeMusicPackage,
-      );
-      await intent.launch();
-      developer.log('YouTube Music launched via VIEW intent', name: 'SwitchBox');
+      // Step 1: Launch YouTube Music via platform channel (proper MAIN/LAUNCHER intent)
+      await _channel.invokeMethod('launchYouTubeMusic');
+      developer.log('YouTube Music launched', name: 'SwitchBox');
 
       // Step 2: Wait for app to initialize
       await Future.delayed(const Duration(milliseconds: 4000));
 
-      // Step 3: Send play via platform channel (global media key)
-      final result = await _channel.invokeMethod('sendMediaPlay');
-      if (result == true) {
-        developer.log('Play command sent to YouTube Music', name: 'SwitchBox');
-      }
+      // Step 3: Use MediaSessionManager to play YTM specifically (like we do for Audible)
+      final result = await _channel.invokeMethod('playPauseYT');
+      developer.log('Play command sent to YouTube Music: $result', name: 'SwitchBox');
     } catch (e) {
       developer.log('Error launching YT Music: $e', name: 'SwitchBox');
     }

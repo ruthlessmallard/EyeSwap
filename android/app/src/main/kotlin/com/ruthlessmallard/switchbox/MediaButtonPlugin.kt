@@ -75,9 +75,7 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                     _sendMediaPlay(result)
                 }
                 "playPauseYT" -> {
-                    val keyCode = call.argument<Int>("keyCode") ?: KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-                    sendMediaButtonToPackage(keyCode, YOUTUBE_MUSIC_PACKAGE)
-                    result.success(null)
+                    playPauseYouTubeMusic(result)
                 }
                 "startRecording" -> {
                     MediaDiagnosticRecorder.getInstance(context).startRecording()
@@ -167,6 +165,39 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
             android.util.Log.w(TAG, "Audible session never appeared after $maxAttempts attempts")
             // Fallback to global media key as last resort
             sendMediaButton(KeyEvent.KEYCODE_MEDIA_PLAY)
+        }
+    }
+
+    /**
+     * Play or pause YouTube Music using its specific MediaController.
+     * Falls back to broadcast if MediaSessionManager isn't available.
+     */
+    private fun playPauseYouTubeMusic(result: MethodChannel.Result) {
+        val sessions = getActiveMediaSessions()
+        val ytmController = sessions.firstOrNull { it.packageName == YOUTUBE_MUSIC_PACKAGE }
+        
+        if (ytmController != null) {
+            try {
+                // Check current state and toggle
+                val state = ytmController.playbackState?.state
+                if (state == PlaybackState.STATE_PLAYING) {
+                    ytmController.transportControls.pause()
+                    android.util.Log.d(TAG, "YouTube Music paused via MediaController")
+                } else {
+                    ytmController.transportControls.play()
+                    android.util.Log.d(TAG, "YouTube Music playing via MediaController")
+                }
+                result.success(true)
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Failed to control YouTube Music: ${e.message}")
+                // Fallback to broadcast
+                sendMediaButtonToPackage(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, YOUTUBE_MUSIC_PACKAGE)
+                result.success(false)
+            }
+        } else {
+            android.util.Log.d(TAG, "YouTube Music session not found, using broadcast fallback")
+            sendMediaButtonToPackage(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, YOUTUBE_MUSIC_PACKAGE)
+            result.success(false)
         }
     }
 
