@@ -137,22 +137,8 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
         }
     }
 
-    private fun killApp(packageName: String) {
-        try {
-            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            activityManager.killBackgroundProcesses(packageName)
-            android.util.Log.d("SwitchBox", "Killed $packageName")
-        } catch (e: Exception) {
-            android.util.Log.e("SwitchBox", "Failed to kill $packageName: ${e.message}")
-        }
-    }
-
     private fun launchAndPlayAudible(result: MethodChannel.Result) {
         try {
-            // Kill YT Music to clear active media session
-            killApp("com.google.android.apps.youtube.music")
-            Thread.sleep(500)
-            
             // Check if Audible is installed
             val packageManager = context.packageManager
             val launchIntent = packageManager.getLaunchIntentForPackage("com.audible.application")
@@ -166,14 +152,25 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
             // Launch Audible
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launchIntent)
-            android.util.Log.d("SwitchBox", "Audible launched, waiting for it to become foreground")
+            android.util.Log.d("SwitchBox", "Audible launched, waiting for it to initialize")
             
-            // Wait 3 seconds for Audible to become foreground
+            // Wait 4 seconds for Audible to initialize
             Thread {
-                Thread.sleep(3000)
+                Thread.sleep(4000)
                 
                 // Send targeted media button intent directly to Audible
-                sendMediaButtonToPackage(KeyEvent.KEYCODE_MEDIA_PLAY, "com.audible.application")
+                val downIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                    setPackage("com.audible.application")
+                    putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY))
+                }
+                val upIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                    setPackage("com.audible.application")
+                    putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY))
+                }
+                
+                context.sendBroadcast(downIntent)
+                Thread.sleep(50)
+                context.sendBroadcast(upIntent)
                 
                 android.util.Log.d("SwitchBox", "Targeted PLAY intent sent to Audible")
                 
@@ -254,10 +251,6 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
 
     private fun launchYouTubeMusicNative(result: MethodChannel.Result) {
         try {
-            // Kill Audible to clear active media session
-            killApp("com.audible.application")
-            Thread.sleep(500)
-            
             // Check if YouTube Music is installed
             val packageManager = context.packageManager
             val launchIntent = packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.music")
@@ -271,14 +264,25 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
             // Launch YouTube Music
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launchIntent)
-            android.util.Log.d("SwitchBox", "YouTube Music launched, waiting for it to become foreground")
+            android.util.Log.d("SwitchBox", "YouTube Music launched, waiting for it to initialize")
             
-            // Wait 3 seconds for YouTube Music to become foreground
+            // Wait 4 seconds for YouTube Music to initialize
             Thread {
-                Thread.sleep(3000)
+                Thread.sleep(4000)
                 
                 // Send targeted media button intent directly to YouTube Music
-                sendMediaButtonToPackage(KeyEvent.KEYCODE_MEDIA_PLAY, "com.google.android.apps.youtube.music")
+                val downIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                    setPackage("com.google.android.apps.youtube.music")
+                    putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY))
+                }
+                val upIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                    setPackage("com.google.android.apps.youtube.music")
+                    putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY))
+                }
+                
+                context.sendBroadcast(downIntent)
+                Thread.sleep(50)
+                context.sendBroadcast(upIntent)
                 
                 android.util.Log.d("SwitchBox", "Targeted PLAY intent sent to YouTube Music")
                 
