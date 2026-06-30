@@ -65,7 +65,7 @@ class _ChunkyButtonState extends State<ChunkyButton> {
         width: 80,
         height: 80,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
+          shape: BoxShape.circle,
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,

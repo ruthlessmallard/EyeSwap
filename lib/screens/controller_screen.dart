@@ -24,7 +24,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
   void initState() {
     super.initState();
     _spenHandler.startListening(() {
-      // S Pen button acts as Button 1 (Audible)
+      // S Pen button acts as Button 1 (YouTube)
       _handleButton1Press();
     });
   }
@@ -76,13 +76,6 @@ class _ControllerScreenState extends State<ControllerScreen> {
     _mediaController.activateGemini();
   }
 
-  void _openDiagnostic() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const DiagnosticScreen()),
-    );
-  }
-
   void _openSettings() {
     Navigator.push(
       context,
@@ -93,22 +86,6 @@ class _ControllerScreenState extends State<ControllerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white70),
-            onPressed: _openSettings,
-            tooltip: 'Settings',
-          ),
-          IconButton(
-            icon: const Icon(Icons.bug_report, color: Colors.white70),
-            onPressed: _openDiagnostic,
-            tooltip: 'Diagnostic Mode',
-          ),
-        ],
-      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -122,55 +99,70 @@ class _ControllerScreenState extends State<ControllerScreen> {
           ),
         ),
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Row(
-              children: [
-                // Round Display (Left side)
-                Expanded(
-                  flex: 2,
-                  child: Center(
-                    child: RoundDisplay(
-                      mainText: _displayText,
-                      subText: _subText,
-                      isScrolling: _isScrolling,
-                    ),
-                  ),
+          child: Stack(
+            children: [
+              // Settings button - top right corner
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  icon: const Icon(Icons.settings, color: Colors.white54, size: 20),
+                  onPressed: _openSettings,
+                  tooltip: 'Settings',
                 ),
-                const SizedBox(width: 32),
-                // 3-Button Cluster (Right side)
-                Expanded(
-                  flex: 3,
-                  child: Center(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        ChunkyButton(
-                          label: '1',
-                          color: const Color(0xFFD32F2F),
-                          onPressed: _handleButton1Press,
-                          onLongPress: _handleButton1LongPress,
+              ),
+              // Main content
+              Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Row(
+                  children: [
+                    // Round Display (Left side)
+                    Expanded(
+                      flex: 2,
+                      child: Center(
+                        child: RoundDisplay(
+                          mainText: _displayText,
+                          subText: _subText,
+                          isScrolling: _isScrolling,
                         ),
-                        const SizedBox(width: 20),
-                        ChunkyButton(
-                          label: '2',
-                          color: const Color(0xFFD32F2F),
-                          onPressed: _handleButton2Press,
-                          onLongPress: _handleButton2LongPress,
-                        ),
-                        const SizedBox(width: 20),
-                        ChunkyButton(
-                          label: '3',
-                          color: const Color(0xFF424242),
-                          onPressed: _handleButton3Press,
-                          onLongPress: _handleButton3LongPress,
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 32),
+                    // 3-Button Cluster (Right side)
+                    Expanded(
+                      flex: 3,
+                      child: Center(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            ChunkyButton(
+                              label: '1',
+                              color: const Color(0xFFD32F2F),
+                              onPressed: _handleButton1Press,
+                              onLongPress: _handleButton1LongPress,
+                            ),
+                            const SizedBox(width: 20),
+                            ChunkyButton(
+                              label: '2',
+                              color: const Color(0xFFD32F2F),
+                              onPressed: _handleButton2Press,
+                              onLongPress: _handleButton2LongPress,
+                            ),
+                            const SizedBox(width: 20),
+                            ChunkyButton(
+                              label: '3',
+                              color: const Color(0xFF424242),
+                              onPressed: _handleButton3Press,
+                              onLongPress: _handleButton3LongPress,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
