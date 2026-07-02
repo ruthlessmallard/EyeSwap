@@ -64,10 +64,10 @@ class _ControllerScreenState extends State<ControllerScreen> {
     _mediaController.skipBackward30();
   }
 
-  // Button 3: Reject call + SMS (tap) / Gemini voice (long)
+  // Button 3: Accept call (tap) / Gemini voice (long)
   void _handleButton3Press() {
-    _updateDisplay('CALL', 'REJECTED', scroll: true);
-    _mediaController.rejectCallWithSms();
+    _updateDisplay('CALL', 'ACCEPTED', scroll: true);
+    _mediaController.acceptCall();
   }
 
   void _handleButton3LongPress() {
