@@ -1,13 +1,41 @@
-# SwitchBox
+# EyeSwap
 
 Personal Media & Navigation Controller for Vehicle Use
 
+**Copyright © 2026 Shawn Baird**
+
+---
+
+## ⚠️ CRITICAL SAFETY DISCLAIMER
+
+**DO NOT USE THIS DEVICE WHILE OPERATING A MOTOR VEHICLE.**
+
+**DO NOT USE THIS DEVICE ON PUBLIC ROADS.**
+
+**DO NOT USE THIS DEVICE NEAR OTHER HUMANS.**
+
+**DO NOT USE THIS DEVICE WITHOUT:**
+- Insurance (life, liability, and a good lawyer on retainer)
+- Your mother's explicit written permission and direct supervision
+- A blast shelter with air-gapped supercomputer access
+- A complete psychological evaluation confirming you should not be doing this
+
+EyeSwap is designed for **stationary fleet vehicles** in **controlled environments**. It is not a replacement for attention, situational awareness, or basic common sense. It will absolutely not prevent you from driving into a ditch while arguing with Audible's chapter skip timing.
+
+**The author, contributors, and this README itself assume zero liability for:**
+- Distracted driving incidents
+- Fleet manager disciplinary actions
+- Insurance claim denials
+- Your mother being disappointed in you
+
+---
+
 ## V0.05 Prototype
 
-Flutter-based Android app for testing the SwitchBox control schema before hardware build.
+Flutter-based Android app for testing the EyeSwap control schema before hardware build.
 
 ### Features
-- 3-button digital representation of physical SwitchBox
+- 3-button digital representation of physical EyeSwap
 - Round display simulation (240x240 GC9A01 equivalent)
 - Scrolling text effects for status/feedback
 - Media control: YouTube Music ↔ Audible switching
@@ -20,5 +48,13 @@ Flutter-based Android app for testing the SwitchBox control schema before hardwa
 
 ### Long Press Actions
 - Hold Button 1: Next Track
-- Hold Button 2: Skip 30 Seconds Forward
-- Hold Button 3: Accept Call (Force Speakerphone Mode)
+- Hold Button 2: Skip 30 Seconds Backward
+- Hold Button 3: Accept Call (Bluetooth → Vehicle Speakers)
+
+---
+
+## Hardware Notes
+
+Designed for older fleet vehicles without Android Auto support. Physical button interface reduces touchscreen dependency during operation.
+
+**Not your mother. Operate responsibly.**
