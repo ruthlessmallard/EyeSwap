@@ -1,65 +1,35 @@
-name: Build Android APK
+name: Build EyeSwap APK
 
 on:
   push:
-    branches: [ master, main, dev ]
+    branches: [master, main]
   pull_request:
-    branches: [ master, main ]
-  workflow_dispatch:
+    branches: [master, main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Java
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '17'
-    
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.22.x'
-        channel: 'stable'
-    
-    - name: Get dependencies
-      run: flutter pub get
-    
-    - name: Setup Android
-      run: |
-        flutter config --enable-android
-        echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
-    
-    - name: Analyze
-      run: flutter analyze --no-fatal-infos
-    
-    - name: Build APK
-      run: flutter build apk --release
-    
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: switchbox-release
-        path: build/app/outputs/flutter-apk/app-release.apk
-    
-    - name: Create Release
-      if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
-      uses: softprops/action-gh-release@v1
-      with:
-        files: build/app/outputs/flutter-apk/app-release.apk
-        tag_name: v0.05-${{ github.run_number }}
-        name: SwitchBox v0.05 Build ${{ github.run_number }}
-        body: |
-          Automated build from ${{ github.sha }}
-          
-          Install: Download `app-release.apk` and install on your Android device.
-          
-          Note: You may need to allow "Install unknown apps" in your browser settings.
-        draft: false
-        prerelease: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          channel: 'stable'
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Generate launcher icons
+        run: flutter pub run flutter_launcher_icons:main
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: eyeswap-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
