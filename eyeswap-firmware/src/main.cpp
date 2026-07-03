@@ -9,8 +9,8 @@
 #include <WiFiUdp.h>
 #include <ArduinoJson.h>
 #include <TFT_eSPI.h>
-#include <Wire.h>
-#include <BH1750.h>
+// #include <Wire.h>
+// #include <BH1750.h>  // Disabled - no BL dimming on this module
 
 // ==== Pin Defines (Sanwa OBSF-24, 3x) ====
 #define BTN_1_PIN     3
@@ -36,8 +36,8 @@ const int UDP_PORT             = 4210;
 const char* PHONE_IP_DEFAULT   = "192.168.4.2";   // Android usually .2
 const int PHONE_UDP_PORT       = 4211;             // Listen on app side if needed
 
-// ==== Light Sensor ====
-BH1750 lightMeter(0x23);  // ADDR to GND
+// ==== Light Sensor (DISABLED) ====
+// BH1750 lightMeter(0x23);  // ADDR to GND - no dimming = no point
 
 // ==== Display ====
 TFT_eSPI tft = TFT_eSPI();
@@ -83,7 +83,7 @@ void setup() {
 
   setupDisplay();
   setupButtons();
-  setupLightSensor();
+  // setupLightSensor();  // Disabled - no BL control
   setupWiFiAP();
 
   Udp.begin(UDP_PORT);
@@ -111,11 +111,9 @@ void setupWiFiAP() {
 
 // ==========================================
 void setupDisplay() {
-  // Setup LEDC for backlight on pin 7 before TFT init
-  ledcAttachPin(7, 0);
-  ledcSetup(0, 5000, 8);
-  ledcWrite(0, 128);
-
+  // No BL pin on this module - backlight always on
+  // Future: could use external transistor on GPIO 7 for dimming
+  
   tft.init();
   tft.setRotation(0);
   tft.fillScreen(TFT_BLACK);
@@ -132,14 +130,14 @@ void setupButtons() {
 }
 
 // ==========================================
-void setupLightSensor() {
-  Wire.begin();
-  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
-    Serial.println("BH1750 init OK");
-  } else {
-    Serial.println("BH1750 NOT FOUND");
-  }
-}
+// void setupLightSensor() {
+//   Wire.begin();
+//   if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+//     Serial.println("BH1750 init OK");
+//   } else {
+//     Serial.println("BH1750 NOT FOUND");
+//   }
+// }
 
 // ==========================================
 void handleUDP() {
@@ -187,22 +185,21 @@ void handleUDP() {
 
 // ==========================================
 void handleBrightness() {
-  static unsigned long lastLuxCheck = 0;
-  if (millis() - lastLuxCheck < 500) return;  // 2Hz max
-  lastLuxCheck = millis();
-
-  float lux = lightMeter.readLightLevel();
-  // Map lux roughly to 20-255
-  int target = map(constrain((int)lux, 0, 500), 0, 500, 20, 255);
-  baseBrightness = target;
-
-  applyBrightness();
+  // DISABLED - no BL control, BH1750 pointless
+  // static unsigned long lastLuxCheck = 0;
+  // if (millis() - lastLuxCheck < 500) return;
+  // lastLuxCheck = millis();
+  // float lux = lightMeter.readLightLevel();
+  // int target = map(constrain((int)lux, 0, 500), 0, 500, 20, 255);
+  // baseBrightness = target;
+  // applyBrightness();
 }
 
 // ==========================================
 void applyBrightness() {
-  int finalBright = constrain(baseBrightness + brightnessOffset, 5, 255);
-  ledcWrite(0, finalBright);
+  // No hardware BL control on this module
+  // Future: external transistor circuit could restore dimming
+  // For now, brightnessOffset is stored but not applied
 }
 
 // ==========================================
