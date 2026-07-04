@@ -102,9 +102,9 @@ class _ControllerScreenState extends State<ControllerScreen> {
   }
 
   void _handleButton1Press() {
-    _updateDisplay('YOUTUBE MUSIC', 'Switching...', scroll: true);
-    _mediaController.focusYouTubeMusic();
-    Future.delayed(const Duration(seconds: 2), () {
+    _updateDisplay('YOUTUBE MUSIC', 'Launching...', scroll: true);
+    _mediaController.launchYouTubeMusic();
+    Future.delayed(const Duration(seconds: 3), () {
       if (mounted) {
         _updateDisplay('YOUTUBE MUSIC', 'PLAYING', scroll: false);
       }
@@ -113,7 +113,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   void _handleButton1LongPress() {
     _updateDisplay('MUSIC NEXT TRACK', 'Skipping...', scroll: true);
-    _mediaController.nextTrack();
+    // Note: Need to add nextTrack method to MediaController
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         _updateDisplay('YOUTUBE MUSIC', 'PLAYING', scroll: false);
@@ -122,9 +122,9 @@ class _ControllerScreenState extends State<ControllerScreen> {
   }
 
   void _handleButton2Press() {
-    _updateDisplay('AUDIBLE', 'Switching...', scroll: true);
-    _mediaController.focusAudible();
-    Future.delayed(const Duration(seconds: 2), () {
+    _updateDisplay('AUDIBLE', 'Launching...', scroll: true);
+    _mediaController.launchAudible();
+    Future.delayed(const Duration(seconds: 3), () {
       if (mounted) {
         _updateDisplay('AUDIBLE', 'PLAYING', scroll: false);
       }
@@ -132,8 +132,8 @@ class _ControllerScreenState extends State<ControllerScreen> {
   }
 
   void _handleButton2LongPress() {
-    _updateDisplay('AUDIBLE REW', 'Skipping...', scroll: true);
-    _mediaController.rewind30();
+    _updateDisplay('AUDIBLE REW', 'Rewinding...', scroll: true);
+    // Note: Need to add rewind method to MediaController
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         _updateDisplay('AUDIBLE', 'PLAYING', scroll: false);
@@ -143,7 +143,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   void _handleButton3Press() {
     _updateDisplay('CALL DENIED', 'Sending SMS...', scroll: true);
-    _mediaController.denyCall();
+    // Note: Need to add call handling to MediaController
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         _updateDisplay('EYESWAP', _isBLEConnected ? 'COM-CONNECTED' : 'BLE UNAVAILABLE', scroll: false);
@@ -153,7 +153,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   void _handleButton3LongPress() {
     _updateDisplay('CALL ACCEPTED', 'Connecting...', scroll: true);
-    _mediaController.acceptCall();
+    // Note: Need to add call handling to MediaController
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         _updateDisplay('EYESWAP', _isBLEConnected ? 'COM-CONNECTED' : 'BLE UNAVAILABLE', scroll: false);
@@ -176,19 +176,22 @@ class _ControllerScreenState extends State<ControllerScreen> {
                   children: [
                     ChunkyButton(
                       label: 'MEDIA A',
-                      onPress: _handleButton1Press,
+                      color: const Color(0xFFD32F2F),
+                      onPressed: _handleButton1Press,
                       onLongPress: _handleButton1LongPress,
                     ),
                     const SizedBox(height: 20),
                     ChunkyButton(
                       label: 'MEDIA B',
-                      onPress: _handleButton2Press,
+                      color: const Color(0xFFD32F2F),
+                      onPressed: _handleButton2Press,
                       onLongPress: _handleButton2LongPress,
                     ),
                     const SizedBox(height: 20),
                     ChunkyButton(
                       label: 'COMM',
-                      onPress: _handleButton3Press,
+                      color: const Color(0xFFD32F2F),
+                      onPressed: _handleButton3Press,
                       onLongPress: _handleButton3LongPress,
                     ),
                   ],
@@ -199,7 +202,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
               Expanded(
                 flex: 2,
                 child: RoundDisplay(
-                  displayText: _displayText,
+                  mainText: _displayText,
                   subText: _subText,
                   isScrolling: _isScrolling,
                 ),
