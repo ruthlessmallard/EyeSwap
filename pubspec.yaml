@@ -12,6 +12,7 @@ dependencies:
   cupertino_icons: ^1.0.6
   android_intent_plus: ^4.0.3
   share_plus: ^10.0.0
+  flutter_blue_plus: ^1.35.0
 
 dev_dependencies:
   flutter_lints: ^4.0.0

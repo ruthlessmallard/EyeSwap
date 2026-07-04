@@ -3,6 +3,7 @@ import '../widgets/round_display.dart';
 import '../widgets/chunky_button.dart';
 import '../services/media_controller.dart';
 import '../services/spen_handler.dart';
+import '../services/esp32_ble.dart';
 import 'settings_screen.dart';
 
 class ControllerScreen extends StatefulWidget {
@@ -15,22 +16,71 @@ class ControllerScreen extends StatefulWidget {
 class _ControllerScreenState extends State<ControllerScreen> {
   final MediaController _mediaController = MediaController();
   final SPenHandler _spenHandler = SPenHandler();
+  final ESP32BLEService _bleService = ESP32BLEService();
   String _displayText = 'SWITCHBOX';
   String _subText = 'MINE READY';
   bool _isScrolling = false;
+  bool _isBLEConnected = false;
 
   @override
   void initState() {
     super.initState();
+    _initBLE();
     _spenHandler.startListening(() {
       // S Pen button acts as Button 1 (YouTube)
       _handleButton1Press();
     });
   }
 
+  Future<void> _initBLE() async {
+    // Listen for connection state
+    _bleService.connectionStream.listen((connected) {
+      setState(() {
+        _isBLEConnected = connected;
+        if (connected) {
+          _subText = 'CONNECTED';
+        } else {
+          _subText = 'SCANNING...';
+        }
+      });
+    });
+
+    // Initialize BLE with button callbacks
+    try {
+      await _bleService.initialize(
+        onButtonTap: _handleBLEButtonTap,
+        onButtonDoubleTap: _handleBLEButtonDoubleTap,
+        onButtonHold: _handleBLEButtonHold,
+      );
+    } catch (e) {
+      setState(() {
+        _subText = 'BLE ERROR';
+      });
+    }
+  }
+
+  void _handleBLEButtonTap() {
+    // Button 1 tap via BLE
+    _updateDisplay('YOUTUBE', 'MUSIC', scroll: true);
+    _mediaController.launchYouTubeMusic();
+  }
+
+  void _handleBLEButtonDoubleTap() {
+    // Button 2 tap via BLE
+    _updateDisplay('AUDIBLE', 'BOOK', scroll: true);
+    _mediaController.launchAudible();
+  }
+
+  void _handleBLEButtonHold() {
+    // Button 1 long press via BLE
+    _updateDisplay('PLAY/PAUSE', 'GLOBAL', scroll: true);
+    _mediaController.playPause();
+  }
+
   @override
   void dispose() {
     _spenHandler.stopListening();
+    _bleService.dispose();
     super.dispose();
   }
 

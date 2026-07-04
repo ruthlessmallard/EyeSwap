@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/esp32_udp.dart';
+import '../services/esp32_ble.dart';
 
 /// Settings screen for configuring ESP32 display
 /// Brightness offset and background color
@@ -11,7 +11,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final ESP32UDPService _udpService = ESP32UDPService();
+  final ESP32BLEService _bleService = ESP32BLEService();
   
   // Brightness offset: -50 to +50, default 0
   double _brightnessOffset = 0;
@@ -35,12 +35,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _udpService.initialize();
+    _bleService.initialize();
   }
 
   @override
   void dispose() {
-    _udpService.dispose();
+    _bleService.dispose();
     super.dispose();
   }
 
@@ -63,7 +63,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _isSending = true;
     });
     
-    final success = await _udpService.sendConfig(
+    final success = await _bleService.sendConfig(
       brightnessOffset: _brightnessOffset.toInt(),
       color: _selectedColor,
     );
@@ -73,9 +73,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
     
     if (success) {
-      _setStatus('Settings applied to SwitchBox');
+      _setStatus('Settings applied to EyeSwap');
     } else {
-      _setStatus('Failed to send. Check WiFi connection to SwitchBox AP.');
+      _setStatus('Failed to send. Check BLE connection to EyeSwap device.');
     }
   }
 
@@ -84,7 +84,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _isSending = true;
     });
     
-    final success = await _udpService.sendTestFlash(
+    final success = await _bleService.sendTestFlash(
       _selectedColor,
       _brightnessOffset.toInt(),
     );
@@ -94,9 +94,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
     
     if (success) {
-      _setStatus('Test flash sent to SwitchBox');
+      _setStatus('Test flash sent to EyeSwap');
     } else {
-      _setStatus('Failed to send. Check WiFi connection to SwitchBox AP.');
+      _setStatus('Failed to send. Check BLE connection to EyeSwap device.');
     }
   }
 
@@ -113,7 +113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       backgroundColor: const Color(0xFF0A0A0A),
       appBar: AppBar(
         title: const Text(
-          'SWITCHBOX SETTINGS',
+          'EYESWAP SETTINGS',
           style: TextStyle(
             fontWeight: FontWeight.bold,
             letterSpacing: 2,
@@ -331,7 +331,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           )
                         : const Icon(Icons.check),
-                    label: const Text('APPLY TO SWITCHBOX'),
+                    label: const Text('APPLY TO EYESWAP'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFFFAA00),
                       foregroundColor: Colors.black,
@@ -367,11 +367,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   SizedBox(height: 8),
                   Text(
-                    'Connect to WiFi: SwitchBox',
+                    'BLE Device: EyeSwap',
                     style: TextStyle(color: Colors.white54, fontSize: 12),
                   ),
                   Text(
-                    'Password: mine1234',
+                    'Auto-connects when in range',
                     style: TextStyle(color: Colors.white54, fontSize: 12),
                   ),
                 ],

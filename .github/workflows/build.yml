@@ -1,4 +1,4 @@
-name: Build EyeSwap APK
+name: Build EyeSwap BLE APK
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
         run: flutter pub get
 
       - name: Generate launcher icons
-        run: flutter pub run flutter_launcher_icons:main
+        run: dart run flutter_launcher_icons:generate
 
       - name: Build APK
         run: flutter build apk --release
@@ -31,5 +31,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: eyeswap-apk
+          name: eyeswap-ble-apk
           path: build/app/outputs/flutter-apk/app-release.apk
