@@ -46,6 +46,13 @@ android {
     }
 }
 
+dependencies {
+    // Force consistent Kotlin versions to resolve duplicate classes
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.8.22"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk::1.8.22"
+}
+
 flutter {
     source '../..'
 }
