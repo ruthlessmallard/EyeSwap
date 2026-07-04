@@ -33,7 +33,6 @@ class _ChunkyButtonState extends State<ChunkyButton> {
       _longPressTimer = Timer(const Duration(milliseconds: 750), () {
         _longPressTriggered = true;
         widget.onLongPress?.call();
-        // Haptic feedback
         HapticFeedback.heavyImpact();
       });
     }
