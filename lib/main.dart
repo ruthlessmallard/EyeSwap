@@ -9,16 +9,16 @@ void main() {
     DeviceOrientation.landscapeRight,
   ]);
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  runApp(const SwitchBoxApp());
+  runApp(const EyeSwapApp());
 }
 
-class SwitchBoxApp extends StatelessWidget {
-  const SwitchBoxApp({super.key});
+class EyeSwapApp extends StatelessWidget {
+  const EyeSwapApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SwitchBox',
+      title: 'EyeSwap',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0A0A0A),
