@@ -1,7 +1,7 @@
 name: eyeswap
 description: Personal Media & Navigation Controller for Vehicle Use
 publish_to: 'none'
-version: 0.0.6+1
+version: 0.1.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -12,7 +12,7 @@ dependencies:
   cupertino_icons: ^1.0.6
   android_intent_plus: ^4.0.3
   share_plus: ^10.0.0
-  flutter_blue_plus: ^1.36.0
+  flutter_blue_plus: ^1.33.7
 
 dev_dependencies:
   flutter_lints: ^4.0.0
