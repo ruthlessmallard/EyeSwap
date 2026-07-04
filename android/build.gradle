@@ -20,15 +20,21 @@ allprojects {
 
 rootProject.buildDir = '../build'
 subprojects {
-    afterEvaluate { project ->
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+// Force compileSdk for all android subprojects
+gradle.projectsEvaluated {
+    subprojects { project ->
         if (project.hasProperty('android')) {
             project.android {
                 compileSdk 35
             }
         }
     }
-    project.buildDir = "${rootProject.buildDir}/${project.name}"
-    project.evaluationDependsOn(':app')
 }
 
 tasks.register("clean", Delete) {
