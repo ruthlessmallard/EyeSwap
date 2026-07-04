@@ -1,5 +1,5 @@
 buildscript {
-    ext.kotlin_version = '1.9.22'
+    ext.kotlin_version = '1.8.22'
     repositories {
         google()
         mavenCentral()
@@ -7,7 +7,7 @@ buildscript {
 
     dependencies {
         classpath 'com.android.tools.build:gradle:8.2.1'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${ kotlin_version }"
     }
 }
 
@@ -16,11 +16,20 @@ allprojects {
         google()
         mavenCentral()
     }
+    
+    // Force consistent Kotlin stdlib versions across all subprojects
+    configurations.all {
+        resolutionStrategy {
+            force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+            force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+            force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+        }
+    }
 }
 
 rootProject.buildDir = '../build'
 subprojects {
-    project.buildDir = "${rootProject.buildDir}/${project.name}"
+    project.buildDir = "${ rootProject.buildDir }/${ project.name }"
     beforeEvaluate {
         // Create flutter extension if missing (for plugins that need flutter.compileSdkVersion)
         // Only for library projects, not the app project where Flutter plugin creates it
@@ -29,7 +38,7 @@ subprojects {
         }
         if (project.hasProperty('android')) {
             project.android {
-                compileSdk 35
+                compileSdk 34
             }
         }
     }
@@ -39,7 +48,7 @@ subprojects {
 }
 
 class FlutterExtension {
-    int compileSdkVersion = 35
+    int compileSdkVersion = 34
 }
 
 tasks.register("clean", Delete) {
