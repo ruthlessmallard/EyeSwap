@@ -9,8 +9,7 @@ class MainActivity: FlutterActivity() {
     
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        // Note: Removed S-Pen plugin registration to fix crashes
-        // Note: MediaButtonPlugin may need updating for package rename
+        MediaButtonPlugin.registerWith(flutterEngine, this)
     }
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
