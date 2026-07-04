@@ -19,6 +19,12 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 35
+          build-tools: 35.0.0
+
       - name: Get dependencies
         run: flutter pub get
 
