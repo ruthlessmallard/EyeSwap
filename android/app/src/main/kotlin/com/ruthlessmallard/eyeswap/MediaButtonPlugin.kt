@@ -12,7 +12,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCallHandler {
     companion object {
-        const val CHANNEL = "com.ruthlessmallard.switchbox/mediabutton"
+        const val CHANNEL = "com.ruthlessmallard.eyeswap/mediabutton"
         private const val AUDIBLE_PACKAGE = "com.audible.application"
         private const val YOUTUBE_MUSIC_PACKAGE = "com.google.android.apps.youtube.music"
         private const val TAG = "EyeSwap"
