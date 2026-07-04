@@ -23,7 +23,8 @@ subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
     beforeEvaluate {
         // Create flutter extension if missing (for plugins that need flutter.compileSdkVersion)
-        if (!project.extensions.findByName('flutter')) {
+        // Only for library projects, not the app project where Flutter plugin creates it
+        if (project.name != 'app' && !project.extensions.findByName('flutter')) {
             project.extensions.create('flutter', FlutterExtension)
         }
         if (project.hasProperty('android')) {
