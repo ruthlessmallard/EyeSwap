@@ -48,9 +48,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
     // Initialize BLE with button callbacks
     try {
       await _bleService.initialize(
-        onButtonTap: _handleBLEButtonTap,
-        onButtonDoubleTap: _handleBLEButtonDoubleTap,
-        onButtonHold: _handleBLEButtonHold,
+        onButtonEvent: _handleBLEButtonEvent,
       );
     } catch (e) {
       setState(() {
@@ -59,22 +57,30 @@ class _ControllerScreenState extends State<ControllerScreen> {
     }
   }
 
-  void _handleBLEButtonTap() {
-    // Button 1 tap via BLE
-    _updateDisplay('YOUTUBE', 'MUSIC', scroll: true);
-    _mediaController.launchYouTubeMusic();
-  }
-
-  void _handleBLEButtonDoubleTap() {
-    // Button 2 tap via BLE
-    _updateDisplay('AUDIBLE', 'BOOK', scroll: true);
-    _mediaController.launchAudible();
-  }
-
-  void _handleBLEButtonHold() {
-    // Button 1 long press via BLE
-    _updateDisplay('PLAY/PAUSE', 'GLOBAL', scroll: true);
-    _mediaController.playPause();
+  void _handleBLEButtonEvent(int button, String action) {
+    switch (button) {
+      case 1:
+        if (action == 'tap') {
+          _handleButton1Press();
+        } else if (action == 'long') {
+          _handleButton1LongPress();
+        }
+        break;
+      case 2:
+        if (action == 'tap') {
+          _handleButton2Press();
+        } else if (action == 'long') {
+          _handleButton2LongPress();
+        }
+        break;
+      case 3:
+        if (action == 'tap') {
+          _handleButton3Press();
+        } else if (action == 'long') {
+          _handleButton3LongPress();
+        }
+        break;
+    }
   }
 
   @override

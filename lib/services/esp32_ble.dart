@@ -20,9 +20,9 @@ class ESP32BLEService {
 
   bool _isConnected = false;
   bool _isScanning = false;
-  VoidCallback? _onButtonTap;
-  VoidCallback? _onButtonDoubleTap;
-  VoidCallback? _onButtonHold;
+  // Button event callback: (buttonNumber, action)
+  // action: "tap", "long"
+  void Function(int button, String action)? _onButtonEvent;
 
   // Connection state broadcast
   final StreamController<bool> _connectionController = StreamController<bool>.broadcast();
@@ -31,13 +31,9 @@ class ESP32BLEService {
 
   /// Initialize BLE and set up listeners
   Future<void> initialize({
-    VoidCallback? onButtonTap,
-    VoidCallback? onButtonDoubleTap,
-    VoidCallback? onButtonHold,
+    void Function(int button, String action)? onButtonEvent,
   }) async {
-    _onButtonTap = onButtonTap;
-    _onButtonDoubleTap = onButtonDoubleTap;
-    _onButtonHold = onButtonHold;
+    _onButtonEvent = onButtonEvent;
 
     // Check if BLE is supported and enabled
     final adapterState = await FlutterBluePlus.adapterState.first;
@@ -145,19 +141,10 @@ class ESP32BLEService {
       final json = jsonDecode(jsonStr);
 
       if (json['type'] == 'button') {
+        final button = json['button'] as int?;
         final action = json['action'] as String?;
-
-        switch (action) {
-          case 'tap':
-            _onButtonTap?.call();
-            break;
-          case 'double_tap':
-            _onButtonDoubleTap?.call();
-            break;
-          case 'hold':
-          case 'long_press':
-            _onButtonHold?.call();
-            break;
+        if (button != null && action != null) {
+          _onButtonEvent?.call(button, action);
         }
       }
     } catch (e) {
