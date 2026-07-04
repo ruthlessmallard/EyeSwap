@@ -22,6 +22,10 @@ rootProject.buildDir = '../build'
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
     beforeEvaluate {
+        // Create flutter extension if missing (for plugins that need flutter.compileSdkVersion)
+        if (!project.extensions.findByName('flutter')) {
+            project.extensions.create('flutter', FlutterExtension)
+        }
         if (project.hasProperty('android')) {
             project.android {
                 compileSdk 35
@@ -31,6 +35,10 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(':app')
+}
+
+class FlutterExtension {
+    int compileSdkVersion = 35
 }
 
 tasks.register("clean", Delete) {
