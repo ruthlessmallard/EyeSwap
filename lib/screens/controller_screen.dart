@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../widgets/round_display.dart';
 import '../widgets/chunky_button.dart';
 import '../services/media_controller.dart';
-import '../services/spen_handler.dart';
 import '../services/esp32_ble.dart';
 import 'settings_screen.dart';
 
@@ -15,44 +14,49 @@ class ControllerScreen extends StatefulWidget {
 
 class _ControllerScreenState extends State<ControllerScreen> {
   final MediaController _mediaController = MediaController();
-  final SPenHandler _spenHandler = SPenHandler();
   final ESP32BLEService _bleService = ESP32BLEService();
-  String _displayText = 'SWITCHBOX';
-  String _subText = 'MINE READY';
+  String _displayText = 'EYESWAP';
+  String _subText = 'READY...';
   bool _isScrolling = false;
   bool _isBLEConnected = false;
+  bool _isBLEAvailable = false;
 
   @override
   void initState() {
     super.initState();
     _initBLE();
-    _spenHandler.startListening(() {
-      // S Pen button acts as Button 1 (YouTube)
-      _handleButton1Press();
-    });
   }
 
   Future<void> _initBLE() async {
-    // Listen for connection state
-    _bleService.connectionStream.listen((connected) {
-      setState(() {
-        _isBLEConnected = connected;
-        if (connected) {
-          _subText = 'CONNECTED';
-        } else {
-          _subText = 'SCANNING...';
-        }
-      });
-    });
-
-    // Initialize BLE with button callbacks
     try {
+      // Listen for connection state
+      _bleService.connectionStream.listen((connected) {
+        setState(() {
+          _isBLEConnected = connected;
+          if (connected) {
+            _subText = 'COM-CONNECTED';
+          } else if (_isBLEAvailable) {
+            _subText = 'SCANNING...';
+          } else {
+            _subText = 'BLE NOT AVAILABLE';
+          }
+        });
+      });
+
+      // Initialize BLE with button callbacks
       await _bleService.initialize(
         onButtonEvent: _handleBLEButtonEvent,
       );
-    } catch (e) {
+      
       setState(() {
-        _subText = 'BLE ERROR';
+        _isBLEAvailable = true;
+        _subText = 'SCANNING...';
+      });
+    } catch (e) {
+      print('BLE initialization failed: $e');
+      setState(() {
+        _isBLEAvailable = false;
+        _subText = 'BLE UNAVAILABLE';
       });
     }
   }
@@ -85,7 +89,6 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   @override
   void dispose() {
-    _spenHandler.stopListening();
     _bleService.dispose();
     super.dispose();
   }
@@ -98,128 +101,122 @@ class _ControllerScreenState extends State<ControllerScreen> {
     });
   }
 
-  // Button 1: YouTube Music (tap) / Global Play/Pause (long)
   void _handleButton1Press() {
-    _updateDisplay('YOUTUBE', 'MUSIC', scroll: true);
-    _mediaController.launchYouTubeMusic();
+    _updateDisplay('YOUTUBE MUSIC', 'Switching...', scroll: true);
+    _mediaController.focusYouTubeMusic();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        _updateDisplay('YOUTUBE MUSIC', 'PLAYING', scroll: false);
+      }
+    });
   }
 
   void _handleButton1LongPress() {
-    _updateDisplay('PLAY/PAUSE', 'GLOBAL', scroll: true);
-    _mediaController.playPause();
+    _updateDisplay('MUSIC NEXT TRACK', 'Skipping...', scroll: true);
+    _mediaController.nextTrack();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        _updateDisplay('YOUTUBE MUSIC', 'PLAYING', scroll: false);
+      }
+    });
   }
 
-  // Button 2: Audible (tap) / Skip Back 30s (long)
   void _handleButton2Press() {
-    _updateDisplay('AUDIBLE', 'BOOK', scroll: true);
-    _mediaController.launchAudible();
+    _updateDisplay('AUDIBLE', 'Switching...', scroll: true);
+    _mediaController.focusAudible();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        _updateDisplay('AUDIBLE', 'PLAYING', scroll: false);
+      }
+    });
   }
 
   void _handleButton2LongPress() {
-    _updateDisplay('SKIP', '-30 SEC', scroll: true);
-    _mediaController.skipBackward30();
+    _updateDisplay('AUDIBLE REW', 'Skipping...', scroll: true);
+    _mediaController.rewind30();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        _updateDisplay('AUDIBLE', 'PLAYING', scroll: false);
+      }
+    });
   }
 
-  // Button 3: Accept call (tap) / Gemini voice (long)
   void _handleButton3Press() {
-    _updateDisplay('CALL', 'ACCEPTED', scroll: true);
-    _mediaController.acceptCall();
+    _updateDisplay('CALL DENIED', 'Sending SMS...', scroll: true);
+    _mediaController.denyCall();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        _updateDisplay('EYESWAP', _isBLEConnected ? 'COM-CONNECTED' : 'BLE UNAVAILABLE', scroll: false);
+      }
+    });
   }
 
   void _handleButton3LongPress() {
-    _updateDisplay('GEMINI', 'LISTENING', scroll: true);
-    _mediaController.activateGemini();
-  }
-
-  void _openSettings() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const SettingsScreen()),
-    );
+    _updateDisplay('CALL ACCEPTED', 'Connecting...', scroll: true);
+    _mediaController.acceptCall();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        _updateDisplay('EYESWAP', _isBLEConnected ? 'COM-CONNECTED' : 'BLE UNAVAILABLE', scroll: false);
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF0A0A0A),
-              Color(0xFF1A1A1A),
-              Color(0xFF0A0A0A),
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: Stack(
+      body: OrientationBuilder(
+        builder: (context, orientation) {
+          return Row(
             children: [
-              // Settings button - top right corner
-              Positioned(
-                top: 8,
-                right: 8,
-                child: IconButton(
-                  icon: const Icon(Icons.settings, color: Colors.white54, size: 20),
-                  onPressed: _openSettings,
-                  tooltip: 'Settings',
-                ),
-              ),
-              // Main content
-              Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Row(
+              // Left column: 3 buttons
+              Expanded(
+                flex: 1,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Round Display (Left side)
-                    Expanded(
-                      flex: 2,
-                      child: Center(
-                        child: RoundDisplay(
-                          mainText: _displayText,
-                          subText: _subText,
-                          isScrolling: _isScrolling,
-                        ),
-                      ),
+                    ChunkyButton(
+                      label: 'MEDIA A',
+                      onPress: _handleButton1Press,
+                      onLongPress: _handleButton1LongPress,
                     ),
-                    const SizedBox(width: 32),
-                    // 3-Button Cluster (Right side)
-                    Expanded(
-                      flex: 3,
-                      child: Center(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            ChunkyButton(
-                              label: '1',
-                              color: const Color(0xFFD32F2F),
-                              onPressed: _handleButton1Press,
-                              onLongPress: _handleButton1LongPress,
-                            ),
-                            const SizedBox(width: 20),
-                            ChunkyButton(
-                              label: '2',
-                              color: const Color(0xFFD32F2F),
-                              onPressed: _handleButton2Press,
-                              onLongPress: _handleButton2LongPress,
-                            ),
-                            const SizedBox(width: 20),
-                            ChunkyButton(
-                              label: '3',
-                              color: const Color(0xFF424242),
-                              onPressed: _handleButton3Press,
-                              onLongPress: _handleButton3LongPress,
-                            ),
-                          ],
-                        ),
-                      ),
+                    const SizedBox(height: 20),
+                    ChunkyButton(
+                      label: 'MEDIA B',
+                      onPress: _handleButton2Press,
+                      onLongPress: _handleButton2LongPress,
+                    ),
+                    const SizedBox(height: 20),
+                    ChunkyButton(
+                      label: 'COMM',
+                      onPress: _handleButton3Press,
+                      onLongPress: _handleButton3LongPress,
                     ),
                   ],
                 ),
               ),
+              const SizedBox(width: 20),
+              // Right column: Display
+              Expanded(
+                flex: 2,
+                child: RoundDisplay(
+                  displayText: _displayText,
+                  subText: _subText,
+                  isScrolling: _isScrolling,
+                ),
+              ),
             ],
-          ),
-        ),
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        mini: true,
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const SettingsScreen()),
+          );
+        },
+        child: const Icon(Icons.settings),
       ),
     );
   }
