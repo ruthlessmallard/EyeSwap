@@ -102,7 +102,6 @@ class _RoundDisplayState extends State<RoundDisplay> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Amber glow effect
               Container(
                 width: 200,
                 height: 100,
