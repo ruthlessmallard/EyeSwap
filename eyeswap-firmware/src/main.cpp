@@ -39,8 +39,8 @@ Button btns[3] = {
 };
 
 // ==== BLE Globals ====
-NimBLEServer* pServer = nullptr;
-NimBLECharacteristic* pCommandChar = nullptr;
+BLEServer* pServer = nullptr;
+BLECharacteristic* pCommandChar = nullptr;
 bool deviceConnected = false;
 
 // ==== Forward Declarations ====
@@ -54,16 +54,17 @@ void drawStatus();
 // ==========================================
 // BLE Server Callbacks
 // ==========================================
-class EyeSwapServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* pServer) override {
+class EyeSwapServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
     deviceConnected = true;
     Serial.println("[BLE] Client connected");
     drawStatus();
   }
-  void onDisconnect(NimBLEServer* pServer) override {
+  
+  void onDisconnect(BLEServer* pServer) {
     deviceConnected = false;
     Serial.println("[BLE] Client disconnected - restarting advertising");
-    NimBLEDevice::startAdvertising();
+    BLEDevice::startAdvertising();
     drawStatus();
   }
 };
@@ -107,26 +108,27 @@ void setupButtons() {
 // ==========================================
 void setupBLE() {
   // CRITICAL: Must advertise as "EyeSwap-ESP32" to match Flutter app
-  NimBLEDevice::init("EyeSwap-ESP32");
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);  // +9dBm max range
+  BLEDevice::init("EyeSwap-ESP32");
 
-  pServer = NimBLEServer::createServer();
+  pServer = BLEDevice::createServer();
   pServer->setCallbacks(new EyeSwapServerCallbacks());
 
-  NimBLEService* pService = pServer->createService(EYESWAP_SERVICE_UUID);
+  BLEService* pService = pServer->createService(EYESWAP_SERVICE_UUID);
 
   // Command characteristic: ESP32 NOTIFIES app with button events
   pCommandChar = pService->createCharacteristic(
     COMMAND_CHAR_UUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
   );
 
   pService->start();
 
-  NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(EYESWAP_SERVICE_UUID);
-  pAdvertising->setName("EyeSwap-ESP32");
-  pAdvertising->start();
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
 
   Serial.println("BLE advertising as 'EyeSwap-ESP32'");
 }
