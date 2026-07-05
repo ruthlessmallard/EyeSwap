@@ -5,7 +5,10 @@
 // ==========================================
 
 #include <Arduino.h>
-#include <NimBLEDevice.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #include <TFT_eSPI.h>
 
 // ==== BLE UUIDs (MUST match Flutter app exactly) ====
@@ -20,7 +23,6 @@
 // ==== Debounce & Timing ====
 #define DEBOUNCE_MS        20
 #define LONG_PRESS_MS      600
-#define BTN_IDLE_MS        50
 
 // ==== Display ====
 TFT_eSPI tft = TFT_eSPI();
@@ -73,7 +75,7 @@ class EyeSwapServerCallbacks : public BLEServerCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\n\n=== EyeSwap BLE Firmware v1.1 ===");
+  Serial.println("\n\n=== EyeSwap BLE Firmware v1.3 ===");
 
   setupDisplay();
   setupButtons();
@@ -121,13 +123,15 @@ void setupBLE() {
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
   );
 
+  pCommandChar->addDescriptor(new BLE2902());
+
   pService->start();
 
   BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(EYESWAP_SERVICE_UUID);
   pAdvertising->setScanResponse(true);
   pAdvertising->setMinPreferred(0x06);
-  pAdvertising->setMinPreferred(0x12);
+  pAdvertising->setMaxPreferred(0x12);
   BLEDevice::startAdvertising();
 
   Serial.println("BLE advertising as 'EyeSwap-ESP32'");
