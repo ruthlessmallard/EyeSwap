@@ -15,9 +15,10 @@
 #define COMMAND_CHAR_UUID       "87654321-4321-4321-4321-cba987654321"
 
 // ==== Pin Defines (Sanwa OBSF-24, 3x) ====
-#define BTN_1_PIN     3
-#define BTN_2_PIN     4
-#define BTN_3_PIN     5
+// FIXED: Avoided pin 3 (reset/boot pin)
+#define BTN_1_PIN     4   // YouTube Music
+#define BTN_2_PIN     5   // Audible
+#define BTN_3_PIN     6   // Call/Gemini
 
 // ==== Timing ====
 #define LONG_PRESS_MS      600
@@ -58,7 +59,7 @@ class EyeSwapServerCallbacks : public BLEServerCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\n\n=== EyeSwap BLE Firmware v1.4 (NO DISPLAY) ===");
+  Serial.println("\n\n=== EyeSwap BLE Firmware v1.5 (PINS FIXED) ===");
 
   setupButtons();
   setupBLE();
@@ -77,7 +78,7 @@ void setupButtons() {
   for (int i=0; i<3; i++) {
     pinMode(btns[i].pin, INPUT_PULLUP);
   }
-  Serial.println("Buttons init OK");
+  Serial.println("Buttons init OK (pins 4,5,6)");
 }
 
 // ==========================================
