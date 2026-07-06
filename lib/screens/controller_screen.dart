@@ -4,6 +4,7 @@ import '../widgets/round_display.dart';
 import '../widgets/chunky_button.dart';
 import '../services/media_controller.dart';
 import '../services/ble_handler.dart';
+import 'settings_screen.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -157,55 +158,81 @@ class _ControllerScreenState extends State<ControllerScreen> {
           ),
         ),
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Row(
-              children: [
-                // Round Display (Left side)
-                Expanded(
-                  flex: 2,
-                  child: Center(
-                    child: RoundDisplay(
-                      mainText: _displayText,
-                      subText: _subText,
-                      isScrolling: _isScrolling,
-                    ),
+          child: Stack(
+            children: [
+              // Settings button - top right
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  icon: const Icon(
+                    Icons.settings,
+                    color: Colors.white54,
+                    size: 28,
                   ),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const SettingsScreen(),
+                      ),
+                    );
+                  },
+                  tooltip: 'Settings',
                 ),
-                const SizedBox(width: 32),
-                // 3-Button Cluster (Right side)
-                Expanded(
-                  flex: 3,
-                  child: Center(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        ChunkyButton(
-                          label: '1',
-                          color: const Color(0xFFD32F2F),
-                          onPressed: _handleButton1Press,
-                          onLongPress: _handleButton1LongPress,
+              ),
+              // Main content
+              Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Row(
+                  children: [
+                    // Round Display (Left side)
+                    Expanded(
+                      flex: 2,
+                      child: Center(
+                        child: RoundDisplay(
+                          mainText: _displayText,
+                          subText: _subText,
+                          isScrolling: _isScrolling,
                         ),
-                        const SizedBox(width: 20),
-                        ChunkyButton(
-                          label: '2',
-                          color: const Color(0xFFD32F2F),
-                          onPressed: _handleButton2Press,
-                          onLongPress: _handleButton2LongPress,
-                        ),
-                        const SizedBox(width: 20),
-                        ChunkyButton(
-                          label: '3',
-                          color: const Color(0xFF424242),
-                          onPressed: _handleButton3Press,
-                          onLongPress: _handleButton3LongPress,
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 32),
+                    // 3-Button Cluster (Right side)
+                    Expanded(
+                      flex: 3,
+                      child: Center(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            ChunkyButton(
+                              label: '1',
+                              color: const Color(0xFFD32F2F),
+                              onPressed: _handleButton1Press,
+                              onLongPress: _handleButton1LongPress,
+                            ),
+                            const SizedBox(width: 20),
+                            ChunkyButton(
+                              label: '2',
+                              color: const Color(0xFFD32F2F),
+                              onPressed: _handleButton2Press,
+                              onLongPress: _handleButton2LongPress,
+                            ),
+                            const SizedBox(width: 20),
+                            ChunkyButton(
+                              label: '3',
+                              color: const Color(0xFF424242),
+                              onPressed: _handleButton3Press,
+                              onLongPress: _handleButton3LongPress,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
