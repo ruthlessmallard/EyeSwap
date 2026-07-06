@@ -40,7 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final List<Map<String, dynamic>> _idleAnimations = [
     {'id': 'marquee', 'name': 'Text Marquee', 'icon': Icons.text_fields},
     {'id': 'static', 'name': 'Static Noise', 'icon': Icons.grain},
-    {'id': 'none', 'name': 'Blank', 'icon': Icons.block},
+    {'id': 'now_playing', 'name': 'Now Playing', 'icon': Icons.music_note},
   ];
 
   @override

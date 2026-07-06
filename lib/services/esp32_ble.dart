@@ -208,11 +208,11 @@ class ESP32BLEService {
   }
 
   /// Send idle animation mode to ESP32
-  /// [mode] 'marquee', 'static', or 'none'
+  /// [mode] 'marquee', 'static', or 'now_playing'
   Future<bool> sendIdleAnimation(String mode) async {
     if (!_isConnected || _configChar == null) return false;
 
-    final validModes = ['marquee', 'static', 'none'];
+    final validModes = ['marquee', 'static', 'now_playing'];
     if (!validModes.contains(mode)) return false;
 
     final packet = jsonEncode({

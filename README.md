@@ -68,12 +68,14 @@ Located in `eyeswap-firmware/` directory. Arduino-based ESP32-S3 firmware for GC
 - JSON command protocol
 
 **TODO / Stubs:**
-- **Idle Animations**: Marquee text scroll, static noise, blank modes
-  - App sends: `{"type":"mode","animation":"marquee|static|none"}`
+- **Idle Animations**: Marquee text scroll, static noise, now playing modes
+  - App sends: `{"type":"mode","animation":"marquee|static|now_playing"}`
   - ESP32 renders selected animation when no media active
+  - `now_playing` shows track metadata received from app
 - **Dual long-press**: Buttons 1+3 held together kills display (privacy mode)
 - **Now Playing**: Receive metadata from app, display on round screen
 - **Time sync**: App sends current time on connect for clock display
+- **Boot screen**: Show welcome ASCII art when powered on / disconnected
 
 **Protocol:**
 ```json
@@ -85,6 +87,29 @@ Located in `eyeswap-firmware/` directory. Arduino-based ESP32-S3 firmware for GC
 
 // ESP32 → App button event
 {"type":"button","button":1,"action":"tap"}
+
+// ESP32 → App (boot status)
+{"type":"status","state":"boot"}
+
+// App → ESP32 (init response with time + animation)
+{"type":"init","time":"13:45","animation":"marquee"}
+
+// ESP32 → App (disconnected from phone)
+{"type":"status","state":"searching"}
 ```
+
+**Boot ASCII Art (240x240 GC9A01):**
+```
+       _____                _   
+      | ____|__ _ _ __   __| |  
+      |  _| / _` | '_ \ / _` |  
+      | |__| (_| | | | | (_| |  
+      |_____\__, |_| |_|\__,_|  
+            |___/               
+
+        WELCOME TO EYESWAP
+         [SEARCHING...]
+```
+Display this centered on boot. Switch to clock + animation mode after app connects and sends `{"type":"init"}`.
 
 **Not your mother. Operate responsibly.**
