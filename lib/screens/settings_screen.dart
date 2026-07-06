@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/esp32_ble.dart';
+import 'button_config_screen.dart';
 
 /// Settings screen for configuring ESP32 display
 /// Brightness offset and background color
@@ -346,6 +347,67 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             
             const SizedBox(height: 24),
+
+            // Button Config Navigation
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: const Color(0xFFFFAA00).withOpacity(0.3),
+                  width: 1,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'BUTTON CONFIGURATION',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 10,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Remap button functions without hardware changes',
+                    style: TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const ButtonConfigScreen(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.gamepad, color: Colors.black),
+                      label: const Text(
+                        'CONFIGURE BUTTONS',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFFAA00),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 24),
             
             // Connection Info
             Container(
@@ -365,7 +427,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       letterSpacing: 1,
                     ),
                   ),
-                  SizedBox(height: 8),
+                  const SizedBox(height: 8),
                   Text(
                     'BLE Device: EyeSwap',
                     style: TextStyle(color: Colors.white54, fontSize: 12),

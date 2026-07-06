@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/round_display.dart';
 import '../widgets/chunky_button.dart';
 import '../services/media_controller.dart';
@@ -57,37 +58,87 @@ class _ControllerScreenState extends State<ControllerScreen> {
     });
   }
 
-  // Button 1: YouTube Music Downloads (tap) / Global Play/Pause (long)
-  void _handleButton1Press() {
-    _updateDisplay('YT MUSIC', 'DOWNLOADS', scroll: true);
-    _mediaController.launchYouTubeMusicDownloads();
+  // Load button mapping from SharedPreferences
+  Future<String> _getButtonFunction(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    final defaults = {
+      'btn1_short': 'yt_downloads',
+      'btn1_long': 'play_pause',
+      'btn2_short': 'audible',
+      'btn2_long': 'skip_back',
+      'btn3_short': 'accept_call',
+      'btn3_long': 'gemini',
+    };
+    return prefs.getString(key) ?? defaults[key] ?? 'none';
   }
 
-  void _handleButton1LongPress() {
-    _updateDisplay('PLAY/PAUSE', 'GLOBAL', scroll: true);
-    _mediaController.playPause();
+  // Execute function by ID
+  Future<void> _executeFunction(String functionId) async {
+    switch (functionId) {
+      case 'yt_music':
+        _updateDisplay('YOUTUBE', 'MUSIC', scroll: true);
+        await _mediaController.launchYouTubeMusic();
+        break;
+      case 'yt_downloads':
+        _updateDisplay('YT MUSIC', 'DOWNLOADS', scroll: true);
+        await _mediaController.launchYouTubeMusicDownloads();
+        break;
+      case 'audible':
+        _updateDisplay('AUDIBLE', 'BOOK', scroll: true);
+        await _mediaController.launchAudible();
+        break;
+      case 'skip_back':
+        _updateDisplay('SKIP', '-30 SEC', scroll: true);
+        await _mediaController.skipBackward30();
+        break;
+      case 'play_pause':
+        _updateDisplay('PLAY/PAUSE', 'GLOBAL', scroll: true);
+        await _mediaController.playPause();
+        break;
+      case 'accept_call':
+        _updateDisplay('CALL', 'ACCEPTED', scroll: true);
+        await _mediaController.acceptCall();
+        break;
+      case 'gemini':
+        _updateDisplay('GEMINI', 'LISTENING', scroll: true);
+        await _mediaController.activateGemini();
+        break;
+      case 'none':
+      default:
+        // Do nothing
+        break;
+    }
   }
 
-  // Button 2: Audible (tap) / Skip Back 30s (long)
-  void _handleButton2Press() {
-    _updateDisplay('AUDIBLE', 'BOOK', scroll: true);
-    _mediaController.launchAudible();
+  // Button handlers - now dynamic
+  void _handleButton1Press() async {
+    final func = await _getButtonFunction('btn1_short');
+    await _executeFunction(func);
   }
 
-  void _handleButton2LongPress() {
-    _updateDisplay('SKIP', '-30 SEC', scroll: true);
-    _mediaController.skipBackward30();
+  void _handleButton1LongPress() async {
+    final func = await _getButtonFunction('btn1_long');
+    await _executeFunction(func);
   }
 
-  // Button 3: Accept call (tap) / Gemini voice (long)
-  void _handleButton3Press() {
-    _updateDisplay('CALL', 'ACCEPTED', scroll: true);
-    _mediaController.acceptCall();
+  void _handleButton2Press() async {
+    final func = await _getButtonFunction('btn2_short');
+    await _executeFunction(func);
   }
 
-  void _handleButton3LongPress() {
-    _updateDisplay('GEMINI', 'LISTENING', scroll: true);
-    _mediaController.activateGemini();
+  void _handleButton2LongPress() async {
+    final func = await _getButtonFunction('btn2_long');
+    await _executeFunction(func);
+  }
+
+  void _handleButton3Press() async {
+    final func = await _getButtonFunction('btn3_short');
+    await _executeFunction(func);
+  }
+
+  void _handleButton3LongPress() async {
+    final func = await _getButtonFunction('btn3_long');
+    await _executeFunction(func);
   }
 
   @override
