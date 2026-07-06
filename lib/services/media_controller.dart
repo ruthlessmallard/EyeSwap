@@ -1,11 +1,12 @@
 import 'dart:developer' as developer;
 import 'package:flutter/services.dart';
 import 'package:android_intent_plus/android_intent.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class MediaController {
   static const MethodChannel _channel = MethodChannel('com.ruthlessmallard.eyeswap/mediabutton');
 
-  /// Launch YouTube Music and start playing
+  /// Launch YouTube Music and start playing (legacy method - uses native intent)
   Future<void> launchYouTubeMusic() async {
     developer.log('Launching YouTube Music', name: 'EyeSwap');
     try {
@@ -14,6 +15,51 @@ class MediaController {
       await _channel.invokeMethod('playPauseYT');
     } catch (e) {
       developer.log('Error launching YT Music: $e', name: 'EyeSwap');
+    }
+  }
+
+  /// Launch YouTube Music directly to Downloads library (Button 1 primary)
+  Future<bool> launchYouTubeMusicDownloads() async {
+    developer.log('Launching YouTube Music Downloads', name: 'EyeSwap');
+    try {
+      final uri = Uri.parse('https://music.youtube.com/library/downloads');
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      
+      if (launched) {
+        // Give YT Music time to open, then attempt to play
+        await Future.delayed(const Duration(milliseconds: 2500));
+        await playPause();
+      }
+      
+      return launched;
+    } catch (e) {
+      developer.log('Error launching YT Music Downloads: $e', name: 'EyeSwap');
+      return false;
+    }
+  }
+
+  /// Launch YouTube Music to a specific playlist
+  Future<bool> launchYouTubeMusicPlaylist(String playlistId) async {
+    developer.log('Launching YouTube Music playlist: $playlistId', name: 'EyeSwap');
+    try {
+      final uri = Uri.parse('https://music.youtube.com/playlist?list=$playlistId');
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      
+      if (launched) {
+        await Future.delayed(const Duration(milliseconds: 2500));
+        await playPause();
+      }
+      
+      return launched;
+    } catch (e) {
+      developer.log('Error launching YT Music playlist: $e', name: 'EyeSwap');
+      return false;
     }
   }
 

@@ -57,10 +57,10 @@ class _ControllerScreenState extends State<ControllerScreen> {
     });
   }
 
-  // Button 1: YouTube Music (tap) / Global Play/Pause (long)
+  // Button 1: YouTube Music Downloads (tap) / Global Play/Pause (long)
   void _handleButton1Press() {
-    _updateDisplay('YOUTUBE', 'MUSIC', scroll: true);
-    _mediaController.launchYouTubeMusic();
+    _updateDisplay('YT MUSIC', 'DOWNLOADS', scroll: true);
+    _mediaController.launchYouTubeMusicDownloads();
   }
 
   void _handleButton1LongPress() {
