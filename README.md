@@ -57,4 +57,34 @@ Flutter-based Android app for testing the EyeSwap control schema before hardware
 
 Designed for older fleet vehicles without Android Auto support. Physical button interface reduces touchscreen dependency during operation.
 
+### ESP32 Firmware (WIP)
+
+Located in `eyeswap-firmware/` directory. Arduino-based ESP32-S3 firmware for GC9A01 round display and BLE communication.
+
+**Implemented:**
+- BLE GATT service for app communication
+- Button press detection (tap/long-press)
+- Display brightness and color config
+- JSON command protocol
+
+**TODO / Stubs:**
+- **Idle Animations**: Marquee text scroll, static noise, blank modes
+  - App sends: `{"type":"mode","animation":"marquee|static|none"}`
+  - ESP32 renders selected animation when no media active
+- **Dual long-press**: Buttons 1+3 held together kills display (privacy mode)
+- **Now Playing**: Receive metadata from app, display on round screen
+- **Time sync**: App sends current time on connect for clock display
+
+**Protocol:**
+```json
+// App → ESP32 config
+{"type":"config","brightness_offset":0,"bg_color":"#FFAA00"}
+
+// App → ESP32 animation mode
+{"type":"mode","animation":"marquee"}
+
+// ESP32 → App button event
+{"type":"button","button":1,"action":"tap"}
+```
+
 **Not your mother. Operate responsibly.**

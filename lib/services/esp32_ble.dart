@@ -207,6 +207,22 @@ class ESP32BLEService {
     return sendConfig(brightnessOffset: brightnessOffset, color: color);
   }
 
+  /// Send idle animation mode to ESP32
+  /// [mode] 'marquee', 'static', or 'none'
+  Future<bool> sendIdleAnimation(String mode) async {
+    if (!_isConnected || _configChar == null) return false;
+
+    final validModes = ['marquee', 'static', 'none'];
+    if (!validModes.contains(mode)) return false;
+
+    final packet = jsonEncode({
+      'type': 'mode',
+      'animation': mode,
+    });
+
+    return _sendConfigPacket(packet);
+  }
+
   /// Internal method to send config packet via BLE
   Future<bool> _sendConfigPacket(String data) async {
     if (_configChar == null) return false;

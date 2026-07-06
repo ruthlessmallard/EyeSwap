@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/esp32_ble.dart';
 import 'button_config_screen.dart';
 
@@ -32,11 +33,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   bool _isSending = false;
   String _statusMessage = '';
+  
+  // Idle animation mode
+  String _idleAnimation = 'marquee'; // marquee, static, none
+  
+  final List<Map<String, dynamic>> _idleAnimations = [
+    {'id': 'marquee', 'name': 'Text Marquee', 'icon': Icons.text_fields},
+    {'id': 'static', 'name': 'Static Noise', 'icon': Icons.grain},
+    {'id': 'none', 'name': 'Blank', 'icon': Icons.block},
+  ];
 
   @override
   void initState() {
     super.initState();
     _bleService.initialize();
+    _loadSettings();
+  }
+  
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _idleAnimation = prefs.getString('idle_animation') ?? 'marquee';
+    });
+  }
+  
+  Future<void> _saveIdleAnimation(String animation) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('idle_animation', animation);
+    setState(() {
+      _idleAnimation = animation;
+    });
+    // TODO: Send to ESP32 when connected
+    _setStatus('Idle animation: $animation');
   }
 
   @override
@@ -408,6 +436,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             
             const SizedBox(height: 24),
+
+            // Idle Animation Selection
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'IDLE ANIMATION',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 10,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Display mode when no media playing',
+                    style: TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _idleAnimations.map((anim) {
+                      final isSelected = _idleAnimation == anim['id'];
+                      return ChoiceChip(
+                        label: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              anim['icon'] as IconData,
+                              size: 16,
+                              color: isSelected ? Colors.black : Colors.white54,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(anim['name'] as String),
+                          ],
+                        ),
+                        selected: isSelected,
+                        onSelected: (_) => _saveIdleAnimation(anim['id'] as String),
+                        backgroundColor: const Color(0xFF0A0A0A),
+                        selectedColor: const Color(0xFFFFAA00),
+                        labelStyle: TextStyle(
+                          color: isSelected ? Colors.black : Colors.white,
+                          fontSize: 12,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 24),
             
             // Connection Info
             Container(
@@ -427,7 +515,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       letterSpacing: 1,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  SizedBox(height: 8),
                   Text(
                     'BLE Device: EyeSwap',
                     style: TextStyle(color: Colors.white54, fontSize: 12),
