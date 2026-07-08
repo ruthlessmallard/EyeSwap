@@ -11,8 +11,9 @@
 #include <BLE2902.h>
 
 // ==== BLE UUIDs (MUST match Flutter app exactly) ====
-#define EYESWAP_SERVICE_UUID    "12345678-1234-1234-1234-123456789abc"
-#define COMMAND_CHAR_UUID       "87654321-4321-4321-4321-cba987654321"
+#define EYESWAP_SERVICE_UUID    "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CONFIG_CHAR_UUID        "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define BUTTON_CHAR_UUID        "a1e60244-960d-4d06-aca2-a2fc604f09be"
 
 // ==== Pin Defines (Sanwa OBSF-24, 3x) ====
 // FIXED: Avoided pin 3 (reset/boot pin)
@@ -38,8 +39,20 @@ Button btns[3] = {
 
 // ==== BLE Globals ====
 BLEServer* pServer = nullptr;
-BLECharacteristic* pCommandChar = nullptr;
+BLECharacteristic* pConfigChar = nullptr;
+BLECharacteristic* pButtonChar = nullptr;
 bool deviceConnected = false;
+
+// ==== Config Callbacks (handle incoming JSON from app) ====
+class ConfigCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    String value = pCharacteristic->getValue();
+    if (value.length() > 0) {
+      Serial.printf("[BLE] Config received: %s\n", value.c_str());
+      // TODO: Parse JSON and handle config/mode commands
+    }
+  }
+};
 
 // ==========================================
 class EyeSwapServerCallbacks : public BLEServerCallbacks {
@@ -83,19 +96,27 @@ void setupButtons() {
 
 // ==========================================
 void setupBLE() {
-  BLEDevice::init("EyeSwap-ESP32");
+  BLEDevice::init("EyeSwap");
 
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new EyeSwapServerCallbacks());
 
   BLEService* pService = pServer->createService(EYESWAP_SERVICE_UUID);
 
-  pCommandChar = pService->createCharacteristic(
-    COMMAND_CHAR_UUID,
+  // Config characteristic (app -> ESP32: JSON commands)
+  pConfigChar = pService->createCharacteristic(
+    CONFIG_CHAR_UUID,
+    BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
+  );
+  pConfigChar->addDescriptor(new BLE2902());
+  pConfigChar->setCallbacks(new ConfigCallbacks());
+
+  // Button characteristic (ESP32 -> app: JSON button events)
+  pButtonChar = pService->createCharacteristic(
+    BUTTON_CHAR_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
   );
-
-  pCommandChar->addDescriptor(new BLE2902());
+  pButtonChar->addDescriptor(new BLE2902());
 
   pService->start();
 
@@ -106,7 +127,7 @@ void setupBLE() {
   pAdvertising->setMaxPreferred(0x12);
   BLEDevice::startAdvertising();
 
-  Serial.println("BLE advertising as 'EyeSwap-ESP32'");
+  Serial.println("BLE advertising as 'EyeSwap'");
 }
 
 // ==========================================
@@ -139,20 +160,16 @@ void handleButtons() {
 
 // ==========================================
 void sendButtonCommand(int btnNum, bool longPress) {
-  if (!deviceConnected || !pCommandChar) {
+  if (!deviceConnected || !pButtonChar) {
     Serial.printf("[BTN] %d %s (no client)\n", btnNum, longPress ? "LONG" : "TAP");
     return;
   }
 
-  String command;
-  if (longPress) {
-    command = "BTN" + String(btnNum) + "_LONG";
-  } else {
-    command = "BTN" + String(btnNum);
-  }
+  // Send JSON: {"type":"button","button":1,"action":"tap|long"}
+  String command = "{\"type\":\"button\",\"button\":" + String(btnNum) + ",\"action\":\"" + (longPress ? "long" : "tap") + "\"}";
 
-  pCommandChar->setValue(command.c_str());
-  pCommandChar->notify();
+  pButtonChar->setValue(command.c_str());
+  pButtonChar->notify();
   
   Serial.printf("[BLE] Sent: %s\n", command.c_str());
 }
