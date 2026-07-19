@@ -70,9 +70,11 @@ class EyeSwapServerCallbacks : public BLEServerCallbacks {
 
 // ==========================================
 void setup() {
+  // N16R8: Native USB-CDC, wait for serial connection
   Serial.begin(115200);
+  while (!Serial) { ; }
   delay(100);
-  Serial.println("\n\n=== EyeSwap BLE Firmware v1.5 (PINS FIXED) ===");
+  Serial.println("\n\n=== EyeSwap BLE Firmware v1.6 (N16R8 USB-CDC) ===");
 
   setupButtons();
   setupBLE();
