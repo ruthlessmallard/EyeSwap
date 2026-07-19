@@ -89,8 +89,10 @@ class BleHandler {
         switch (buttonNum) {
           case 1:
             if (action == 'tap') {
+              developer.log('Calling onButton1Press', name: 'BleHandler');
               onButton1Press?.call();
             } else if (action == 'long') {
+              developer.log('Calling onButton1LongPress', name: 'BleHandler');
               onButton1LongPress?.call();
             }
             break;

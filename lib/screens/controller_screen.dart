@@ -75,6 +75,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   // Execute function by ID
   Future<void> _executeFunction(String functionId) async {
+    print('[DEBUG] Executing function: $functionId');
     switch (functionId) {
       case 'yt_music':
         _updateDisplay('YOUTUBE', 'MUSIC', scroll: true);
@@ -113,7 +114,9 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   // Button handlers - now dynamic
   void _handleButton1Press() async {
+    print('[DEBUG] Button 1 pressed!');
     final func = await _getButtonFunction('btn1_short');
+    print('[DEBUG] Button 1 function: $func');
     await _executeFunction(func);
   }
 
