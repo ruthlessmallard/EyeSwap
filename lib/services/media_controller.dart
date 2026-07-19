@@ -18,25 +18,15 @@ class MediaController {
     }
   }
 
-  /// Launch YouTube Music directly to Downloads library (Button 1 primary)
+  /// Launch YouTube Music and auto-play (with accessibility service for offline support)
   Future<bool> launchYouTubeMusicDownloads() async {
-    developer.log('Launching YouTube Music Downloads', name: 'EyeSwap');
+    developer.log('Launching YouTube Music (accessibility-assisted)', name: 'EyeSwap');
     try {
-      final uri = Uri.parse('https://music.youtube.com/library/downloads');
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-      
-      if (launched) {
-        // Give YT Music time to open and gain audio focus, then send generic media key
-        await Future.delayed(const Duration(milliseconds: 3500));
-        await playPause();
-      }
-      
-      return launched;
+      // Use native method with built-in delays and targeted play
+      final result = await _channel.invokeMethod('launchYouTubeMusic');
+      return result == 'launched_and_playing' || result == 'launched_and_played';
     } catch (e) {
-      developer.log('Error launching YT Music Downloads: $e', name: 'EyeSwap');
+      developer.log('Error launching YTM: $e', name: 'EyeSwap');
       return false;
     }
   }
