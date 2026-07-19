@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -16,9 +17,9 @@ class BleHandler {
   VoidCallback? onDeviceConnected;
   VoidCallback? onDeviceDisconnected;
 
-  static const String deviceName = 'EyeSwap-ESP32';
-  static const String serviceUuid = '12345678-1234-1234-1234-123456789abc';
-  static const String commandCharUuid = '87654321-4321-4321-4321-cba987654321';
+  static const String deviceName = 'EyeSwap';
+  static const String serviceUuid = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+  static const String buttonCharUuid = 'a1e60244-960d-4d06-aca2-a2fc604f09be';
 
   Future<void> initialize() async {
     try {
@@ -55,7 +56,7 @@ class BleHandler {
       for (BluetoothService service in services) {
         if (service.uuid.toString().toLowerCase() == serviceUuid) {
           for (BluetoothCharacteristic char in service.characteristics) {
-            if (char.uuid.toString().toLowerCase() == commandCharUuid) {
+            if (char.uuid.toString().toLowerCase() == buttonCharUuid) {
               _commandCharacteristic = char;
               await char.setNotifyValue(true);
               char.value.listen(_handleCommand);
@@ -74,29 +75,43 @@ class BleHandler {
   void _handleCommand(List<int> data) {
     if (data.isEmpty) return;
     
-    String command = String.fromCharCodes(data).trim();
-    developer.log('BLE command: $command', name: 'BleHandler');
+    String jsonString = String.fromCharCodes(data).trim();
+    developer.log('BLE JSON: $jsonString', name: 'BleHandler');
     
-    // Map ESP32 commands to button handlers
-    switch (command) {
-      case 'BTN1':
-        onButton1Press?.call();
-        break;
-      case 'BTN1_LONG':
-        onButton1LongPress?.call();
-        break;
-      case 'BTN2':
-        onButton2Press?.call();
-        break;
-      case 'BTN2_LONG':
-        onButton2LongPress?.call();
-        break;
-      case 'BTN3':
-        onButton3Press?.call();
-        break;
-      case 'BTN3_LONG':
-        onButton3LongPress?.call();
-        break;
+    try {
+      // Parse JSON from firmware: {"type":"button","button":1,"action":"tap"}
+      final json = jsonDecode(jsonString);
+      if (json['type'] == 'button') {
+        final int buttonNum = json['button'];
+        final String action = json['action'];
+        
+        // Route to appropriate handler
+        switch (buttonNum) {
+          case 1:
+            if (action == 'tap') {
+              onButton1Press?.call();
+            } else if (action == 'long') {
+              onButton1LongPress?.call();
+            }
+            break;
+          case 2:
+            if (action == 'tap') {
+              onButton2Press?.call();
+            } else if (action == 'long') {
+              onButton2LongPress?.call();
+            }
+            break;
+          case 3:
+            if (action == 'tap') {
+              onButton3Press?.call();
+            } else if (action == 'long') {
+              onButton3LongPress?.call();
+            }
+            break;
+        }
+      }
+    } catch (e) {
+      developer.log('JSON parse error: $e', name: 'BleHandler');
     }
   }
 
