@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_service_description">EyeSwap automatically taps YouTube Music offline/downloads buttons to enable hands-free operation in vehicles. Only monitors YouTube Music app.</string>
+    <string name="accessibility_service_description">EyeSwap uses accessibility to automatically dismiss the YouTube Music offline popup so you can control playback hands-free.</string>
 </resources>

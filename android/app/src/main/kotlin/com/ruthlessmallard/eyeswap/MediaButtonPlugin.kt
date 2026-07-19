@@ -7,9 +7,12 @@ import android.media.AudioManager
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.KeyEvent
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -103,6 +106,24 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 }
                 "activateGemini" -> {
                     activateGemini(result)
+                }
+                "hasInternetConnection" -> {
+                    result.success(hasInternetConnection())
+                }
+                "isNotificationAccessEnabled" -> {
+                    result.success(isNotificationAccessEnabled())
+                }
+                "isAccessibilityServiceEnabled" -> {
+                    result.success(isAccessibilityServiceEnabled())
+                }
+                "openNotificationSettings" -> {
+                    openNotificationSettings(result)
+                }
+                "openAccessibilitySettings" -> {
+                    openAccessibilitySettings(result)
+                }
+                "launchYouTubeMusicSmart" -> {
+                    launchYouTubeMusicSmart(result)
                 }
                 else -> result.notImplemented()
             }
@@ -527,6 +548,117 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to send media play: ${e.message}")
             result.error("SEND_FAILED", "Failed to send media play: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Check if device has active internet connection
+     */
+    private fun hasInternetConnection(): Boolean {
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(activeNetwork) ?: return false
+            return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to check internet: ${e.message}")
+            return false
+        }
+    }
+    
+    /**
+     * Check if notification access is enabled (required for MediaSessionManager)
+     */
+    private fun isNotificationAccessEnabled(): Boolean {
+        try {
+            val enabled = Settings.Secure.getString(
+                context.contentResolver,
+                "enabled_notification_listeners"
+            ) ?: return false
+            val componentName = "${context.packageName}/.EyeSwapNotificationListener"
+            return enabled.contains(componentName)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to check notification access: ${e.message}")
+            return false
+        }
+    }
+    
+    /**
+     * Check if accessibility service is enabled
+     */
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        try {
+            val enabled = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: return false
+            val serviceName = "${context.packageName}/.EyeSwapAccessibilityService"
+            return enabled.contains(serviceName)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to check accessibility service: ${e.message}")
+            return false
+        }
+    }
+    
+    /**
+     * Open notification access settings
+     */
+    private fun openNotificationSettings(result: MethodChannel.Result) {
+        try {
+            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            result.success(true)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to open notification settings: ${e.message}")
+            result.success(false)
+        }
+    }
+    
+    /**
+     * Open accessibility settings
+     */
+    private fun openAccessibilitySettings(result: MethodChannel.Result) {
+        try {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            result.success(true)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to open accessibility settings: ${e.message}")
+            result.success(false)
+        }
+    }
+    
+    /**
+     * Smart YouTube Music launcher - online vs offline strategy
+     */
+    private fun launchYouTubeMusicSmart(result: MethodChannel.Result) {
+        try {
+            if (hasInternetConnection()) {
+                // Online: Use generic launch + play approach
+                android.util.Log.d(TAG, "Online: Using generic YTM launch + play")
+                launchYouTubeMusic(result)
+            } else {
+                // Offline: Launch YTM and let accessibility service handle popups
+                android.util.Log.d(TAG, "Offline: Using YTM launch + accessibility assistance")
+                
+                val packageManager = context.packageManager
+                val launchIntent = packageManager.getLaunchIntentForPackage(YOUTUBE_MUSIC_PACKAGE)
+                
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(launchIntent)
+                    android.util.Log.d(TAG, "YouTube Music launched for offline use")
+                    result.success("launched_offline")
+                } else {
+                    android.util.Log.w(TAG, "YouTube Music not installed")
+                    result.success("not_installed")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed smart YTM launch: ${e.message}")
+            result.error("LAUNCH_FAILED", "Failed to launch YouTube Music: ${e.message}", null)
         }
     }
 }

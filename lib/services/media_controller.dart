@@ -18,16 +18,66 @@ class MediaController {
     }
   }
 
-  /// Launch YouTube Music and auto-play (with accessibility service for offline support)
+  /// Launch YouTube Music with smart online/offline detection
   Future<bool> launchYouTubeMusicDownloads() async {
-    developer.log('Launching YouTube Music (accessibility-assisted)', name: 'EyeSwap');
+    developer.log('Launching YouTube Music (smart routing)', name: 'EyeSwap');
     try {
-      // Use native method with built-in delays and targeted play
-      final result = await _channel.invokeMethod('launchYouTubeMusic');
-      return result == 'launched_and_playing' || result == 'launched_and_played';
+      final result = await _channel.invokeMethod('launchYouTubeMusicSmart');
+      return result == 'launched_and_playing' || result == 'launched_and_played' || result == 'launched_offline';
     } catch (e) {
-      developer.log('Error launching YTM: $e', name: 'EyeSwap');
+      developer.log('Error launching YTM smart: $e', name: 'EyeSwap');
       return false;
+    }
+  }
+  
+  /// Check if device has internet connectivity
+  Future<bool> hasInternetConnection() async {
+    try {
+      final result = await _channel.invokeMethod('hasInternetConnection');
+      return result == true;
+    } catch (e) {
+      developer.log('Error checking internet: $e', name: 'EyeSwap');
+      return false;
+    }
+  }
+  
+  /// Check if notification access is enabled
+  Future<bool> isNotificationAccessEnabled() async {
+    try {
+      final result = await _channel.invokeMethod('isNotificationAccessEnabled');
+      return result == true;
+    } catch (e) {
+      developer.log('Error checking notification access: $e', name: 'EyeSwap');
+      return false;
+    }
+  }
+  
+  /// Check if accessibility service is enabled
+  Future<bool> isAccessibilityServiceEnabled() async {
+    try {
+      final result = await _channel.invokeMethod('isAccessibilityServiceEnabled');
+      return result == true;
+    } catch (e) {
+      developer.log('Error checking accessibility service: $e', name: 'EyeSwap');
+      return false;
+    }
+  }
+  
+  /// Open notification access settings
+  Future<void> openNotificationSettings() async {
+    try {
+      await _channel.invokeMethod('openNotificationSettings');
+    } catch (e) {
+      developer.log('Error opening notification settings: $e', name: 'EyeSwap');
+    }
+  }
+  
+  /// Open accessibility settings
+  Future<void> openAccessibilitySettings() async {
+    try {
+      await _channel.invokeMethod('openAccessibilitySettings');
+    } catch (e) {
+      developer.log('Error opening accessibility settings: $e', name: 'EyeSwap');
     }
   }
 

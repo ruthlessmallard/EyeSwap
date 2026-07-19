@@ -5,6 +5,7 @@ import '../widgets/chunky_button.dart';
 import '../services/media_controller.dart';
 import '../services/ble_handler.dart';
 import 'settings_screen.dart';
+import 'permissions_screen.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -24,6 +25,23 @@ class _ControllerScreenState extends State<ControllerScreen> {
   void initState() {
     super.initState();
     _initializeBle();
+    _checkFirstLaunch();
+  }
+  
+  void _checkFirstLaunch() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasLaunchedBefore = prefs.getBool('has_launched_before') ?? false;
+    
+    if (!hasLaunchedBefore) {
+      // Show permissions screen on first launch
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const PermissionsScreen()),
+        );
+      });
+      await prefs.setBool('has_launched_before', true);
+    }
   }
 
   @override
