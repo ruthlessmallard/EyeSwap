@@ -281,16 +281,40 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
      */
     private fun launchYouTubeMusicOffline(result: MethodChannel.Result) {
         try {
-            // Navigate directly to downloads section with package targeting
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                data = android.net.Uri.parse("https://music.youtube.com/library/downloads")
-                setPackage(YOUTUBE_MUSIC_PACKAGE)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // Try multiple YouTube Music deep link formats
+            val attempts = listOf(
+                "vnd.youtube.music://music.youtube.com/library/downloads",
+                "ytmusic://library/downloads",
+                "android-app://com.google.android.apps.youtube.music/library/downloads",
+                "https://music.youtube.com/library/downloads"
+            )
+            
+            var intent: Intent? = null
+            for (uri in attempts) {
+                val testIntent = Intent(Intent.ACTION_VIEW).apply {
+                    data = android.net.Uri.parse(uri)
+                    setPackage(YOUTUBE_MUSIC_PACKAGE)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                
+                if (testIntent.resolveActivity(context.packageManager) != null) {
+                    intent = testIntent
+                    android.util.Log.d(TAG, "Using YouTube Music URI: $uri")
+                    break
+                }
             }
             
-            if (intent.resolveActivity(context.packageManager) != null) {
+            // Final fallback: just launch the app
+            if (intent == null) {
+                intent = context.packageManager.getLaunchIntentForPackage(YOUTUBE_MUSIC_PACKAGE)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                android.util.Log.d(TAG, "Using generic YTM launch intent")
+            }
+            
+            if (intent != null) {
                 context.startActivity(intent)
-                android.util.Log.d(TAG, "YouTube Music Downloads launched with package intent")
+                android.util.Log.d(TAG, "YouTube Music launched")
                 
                 // Give YTM time to navigate and register its session (2000ms)
                 Handler(Looper.getMainLooper()).postDelayed({
