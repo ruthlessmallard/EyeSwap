@@ -29,9 +29,9 @@ class MediaController {
       );
       
       if (launched) {
-        // Give YT Music time to open, then attempt to play
-        await Future.delayed(const Duration(milliseconds: 2500));
-        await playPause();
+        // Give YT Music time to open, then attempt to play via YT-specific method
+        await Future.delayed(const Duration(milliseconds: 4000));
+        await _channel.invokeMethod('playPauseYT');
       }
       
       return launched;
