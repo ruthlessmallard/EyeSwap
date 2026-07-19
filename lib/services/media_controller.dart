@@ -20,13 +20,23 @@ class MediaController {
 
   /// Launch YouTube Music directly to Downloads library (Button 1 primary)
   Future<bool> launchYouTubeMusicDownloads() async {
-    developer.log('Launching YouTube Music Downloads (offline)', name: 'EyeSwap');
+    developer.log('Launching YouTube Music Downloads', name: 'EyeSwap');
     try {
-      // Use new package-specific Android method with built-in retry logic
-      final result = await _channel.invokeMethod('launchYouTubeMusicOffline');
-      return result == true;
+      final uri = Uri.parse('https://music.youtube.com/library/downloads');
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      
+      if (launched) {
+        // Give YT Music time to open and gain audio focus, then send generic media key
+        await Future.delayed(const Duration(milliseconds: 3500));
+        await playPause();
+      }
+      
+      return launched;
     } catch (e) {
-      developer.log('Error launching YTM offline: $e', name: 'EyeSwap');
+      developer.log('Error launching YT Music Downloads: $e', name: 'EyeSwap');
       return false;
     }
   }
