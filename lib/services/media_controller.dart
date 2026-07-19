@@ -20,36 +20,13 @@ class MediaController {
 
   /// Launch YouTube Music directly to Downloads library (Button 1 primary)
   Future<bool> launchYouTubeMusicDownloads() async {
-    developer.log('Launching YouTube Music Downloads', name: 'EyeSwap');
+    developer.log('Launching YouTube Music Downloads (offline)', name: 'EyeSwap');
     try {
-      final uri = Uri.parse('https://music.youtube.com/library/downloads');
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-      
-      if (launched) {
-        // Give YT Music time to open and register its MediaSession
-        await Future.delayed(const Duration(milliseconds: 2500));
-        
-        // Try YouTube-specific method first, fallback to generic if it fails
-        try {
-          final result = await _channel.invokeMethod('playPauseYT');
-          if (result != true) {
-            // YT Music MediaSession not found, use generic play as fallback
-            developer.log('YT MediaSession not found, using generic play', name: 'EyeSwap');
-            await Future.delayed(const Duration(milliseconds: 1500));
-            await _channel.invokeMethod('play');
-          }
-        } catch (e) {
-          developer.log('playPauseYT failed: $e, using generic fallback', name: 'EyeSwap');
-          await _channel.invokeMethod('play');
-        }
-      }
-      
-      return launched;
+      // Use new package-specific Android method with built-in retry logic
+      final result = await _channel.invokeMethod('launchYouTubeMusicOffline');
+      return result == true;
     } catch (e) {
-      developer.log('Error launching YT Music Downloads: $e', name: 'EyeSwap');
+      developer.log('Error launching YTM offline: $e', name: 'EyeSwap');
       return false;
     }
   }

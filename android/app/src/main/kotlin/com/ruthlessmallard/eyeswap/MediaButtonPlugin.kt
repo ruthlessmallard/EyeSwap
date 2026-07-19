@@ -77,6 +77,9 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 "playPauseYT" -> {
                     playPauseYouTubeMusic(result)
                 }
+                "launchYouTubeMusicOffline" -> {
+                    launchYouTubeMusicOffline(result)
+                }
                 "startRecording" -> {
                     MediaDiagnosticRecorder.getInstance(context).startRecording()
                     result.success(true)
@@ -269,6 +272,65 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
             android.util.Log.w(TAG, "Audible session never appeared after $maxAttempts attempts")
             // Fallback to global media key as last resort
             sendMediaButton(KeyEvent.KEYCODE_MEDIA_PLAY)
+        }
+    }
+
+    /**
+     * Launch YouTube Music directly to Downloads section and play.
+     * Uses package-specific intent with MediaSession retry logic.
+     */
+    private fun launchYouTubeMusicOffline(result: MethodChannel.Result) {
+        try {
+            // Navigate directly to downloads section with package targeting
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                data = android.net.Uri.parse("https://music.youtube.com/library/downloads")
+                setPackage(YOUTUBE_MUSIC_PACKAGE)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            
+            if (intent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(intent)
+                android.util.Log.d(TAG, "YouTube Music Downloads launched with package intent")
+                
+                // Give YTM time to navigate and register its session (2000ms)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    playSpecificSession(YOUTUBE_MUSIC_PACKAGE, 0, result)
+                }, 2000)
+            } else {
+                android.util.Log.w(TAG, "YouTube Music app not found")
+                result.success(false)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to launch YTM offline: ${e.message}")
+            result.error("LAUNCH_FAILED", "${e.message}", null)
+        }
+    }
+    
+    /**
+     * Play specific app's MediaSession with retry logic.
+     * Retries up to 5 times with 600ms intervals.
+     */
+    private fun playSpecificSession(packageName: String, attempt: Int, result: MethodChannel.Result?) {
+        val sessions = getActiveMediaSessions()
+        val controller = sessions.firstOrNull { it.packageName == packageName }
+        
+        if (controller != null) {
+            try {
+                controller.transportControls.play()
+                android.util.Log.d(TAG, "$packageName session found and play triggered")
+                result?.success(true)
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Failed to play $packageName: ${e.message}")
+                result?.success(false)
+            }
+        } else if (attempt < 5) {
+            android.util.Log.d(TAG, "$packageName session not ready, retrying in 600ms (attempt ${attempt + 1}/5)")
+            Handler(Looper.getMainLooper()).postDelayed({
+                playSpecificSession(packageName, attempt + 1, result)
+            }, 600)
+        } else {
+            android.util.Log.w(TAG, "$packageName session never appeared after 5 attempts")
+            result?.success(false)
         }
     }
 
