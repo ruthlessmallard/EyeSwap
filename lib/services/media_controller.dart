@@ -29,9 +29,22 @@ class MediaController {
       );
       
       if (launched) {
-        // Give YT Music time to open, then attempt to play via YT-specific method
-        await Future.delayed(const Duration(milliseconds: 4000));
-        await _channel.invokeMethod('playPauseYT');
+        // Give YT Music time to open and register its MediaSession
+        await Future.delayed(const Duration(milliseconds: 2500));
+        
+        // Try YouTube-specific method first, fallback to generic if it fails
+        try {
+          final result = await _channel.invokeMethod('playPauseYT');
+          if (result != true) {
+            // YT Music MediaSession not found, use generic play as fallback
+            developer.log('YT MediaSession not found, using generic play', name: 'EyeSwap');
+            await Future.delayed(const Duration(milliseconds: 1500));
+            await _channel.invokeMethod('play');
+          }
+        } catch (e) {
+          developer.log('playPauseYT failed: $e, using generic fallback', name: 'EyeSwap');
+          await _channel.invokeMethod('play');
+        }
       }
       
       return launched;
