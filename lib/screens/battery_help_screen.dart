@@ -56,7 +56,7 @@ class BatteryHelpScreen extends StatelessWidget {
             _buildStep(
               '3',
               'Allow EyeSwap', 
-              'Find EyeSwap → Don\\'t optimize',
+              'Find EyeSwap → Do not optimize',
               Icons.check_circle,
             ),
             
