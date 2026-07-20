@@ -5,7 +5,7 @@ import '../widgets/chunky_button.dart';
 import '../services/media_controller.dart';
 import '../services/ble_handler.dart';
 import 'settings_screen.dart';
-import 'permissions_screen.dart';
+import 'package:wakelock/wakelock.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -47,10 +47,14 @@ class _ControllerScreenState extends State<ControllerScreen> {
   @override
   void dispose() {
     _bleHandler.disconnect();
+    Wakelock.disable();
     super.dispose();
   }
 
   void _initializeBle() async {
+    // Keep CPU alive for BLE processing even when screen off
+    Wakelock.enable();
+    
     await _bleHandler.initialize();
     _bleHandler.onDeviceConnected = () {
       _updateDisplay('EYESWAP', 'CONNECTED');
