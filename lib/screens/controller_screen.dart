@@ -5,7 +5,7 @@ import '../widgets/chunky_button.dart';
 import '../services/media_controller.dart';
 import '../services/ble_handler.dart';
 import 'settings_screen.dart';
-import 'package:wakelock/wakelock.dart';
+import 'battery_help_screen.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -47,14 +47,10 @@ class _ControllerScreenState extends State<ControllerScreen> {
   @override
   void dispose() {
     _bleHandler.disconnect();
-    Wakelock.disable();
     super.dispose();
   }
 
   void _initializeBle() async {
-    // Keep CPU alive for BLE processing even when screen off
-    Wakelock.enable();
-    
     await _bleHandler.initialize();
     _bleHandler.onDeviceConnected = () {
       _updateDisplay('EYESWAP', 'CONNECTED');
@@ -204,6 +200,27 @@ class _ControllerScreenState extends State<ControllerScreen> {
                     );
                   },
                   tooltip: 'Settings',
+                ),
+              ),
+              // Battery help button - top left
+              Positioned(
+                top: 8,
+                left: 8,
+                child: IconButton(
+                  icon: const Icon(
+                    Icons.battery_alert,
+                    color: Colors.orange,
+                    size: 28,
+                  ),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const BatteryHelpScreen(),
+                      ),
+                    );
+                  },
+                  tooltip: 'Battery Help',
                 ),
               ),
               // Main content
