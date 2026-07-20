@@ -529,10 +529,24 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(launchIntent)
-                result.success(true)
-                android.util.Log.d(TAG, "YouTube Music launched successfully")
+                android.util.Log.d(TAG, "YouTube Music launched, waiting 3s then playing")
+                
+                // Wait 3 seconds for YouTube Music to become foreground, then play
+                Thread {
+                    Thread.sleep(3000)
+                    
+                    // Send targeted media button intent directly to YouTube Music
+                    sendMediaButtonToPackage(KeyEvent.KEYCODE_MEDIA_PLAY, YOUTUBE_MUSIC_PACKAGE)
+                    
+                    android.util.Log.d(TAG, "Targeted PLAY sent to YouTube Music")
+                    
+                    Handler(Looper.getMainLooper()).post {
+                        result.success("launched_and_played")
+                    }
+                }.start()
+                
             } else {
-                result.success(false)
+                result.success("not_installed")
                 android.util.Log.w(TAG, "YouTube Music not installed")
             }
         } catch (e: Exception) {
