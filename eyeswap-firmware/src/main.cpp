@@ -1,5 +1,5 @@
 // ==========================================
-// EyeSwap Firmware — ESP32-S3 (MINIMAL - NO DISPLAY)
+// EyeSwap Firmware — ESP32-S3 (TFT BASIC)
 // BLE Peripheral for Personal Media Controller
 // Copyright © 2026 Shawn Baird
 // ==========================================
@@ -9,6 +9,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <TFT_eSPI.h>
+#include <SPI.h>
 
 // ==== BLE UUIDs (MUST match Flutter app exactly) ====
 #define EYESWAP_SERVICE_UUID    "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -43,6 +45,13 @@ BLECharacteristic* pConfigChar = nullptr;
 BLECharacteristic* pButtonChar = nullptr;
 bool deviceConnected = false;
 
+// ==== TFT Globals ====
+TFT_eSPI tft = TFT_eSPI();
+String marqueeText = "EyeSwap";
+int marqueePos = 0;
+unsigned long lastMarqueeUpdate = 0;
+#define MARQUEE_MS 150
+
 // ==== Config Callbacks (handle incoming JSON from app) ====
 class ConfigCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* pCharacteristic) {
@@ -74,8 +83,9 @@ void setup() {
   Serial.begin(115200);
   while (!Serial) { ; }
   delay(100);
-  Serial.println("\n\n=== EyeSwap BLE Firmware v1.6 (N16R8 USB-CDC) ===");
+  Serial.println("\n\n=== EyeSwap BLE Firmware v1.7 (TFT Basic) ===");
 
+  setupTFT();
   setupButtons();
   setupBLE();
 
@@ -85,7 +95,43 @@ void setup() {
 // ==========================================
 void loop() {
   handleButtons();
+  updateMarquee();
   delay(2);
+}
+
+// ==========================================
+void setupTFT() {
+  Serial.println("TFT init starting...");
+  
+  // Initialize TFT
+  tft.init();
+  tft.setRotation(0);  // Round display, adjust if needed
+  tft.fillScreen(TFT_BLACK);
+  
+  // Set text properties
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);  // Middle center
+  
+  // Show boot message
+  tft.drawString("EyeSwap", 120, 120);
+  
+  Serial.println("TFT init OK (240x240 GC9A01)");
+}
+
+// ==========================================
+void updateMarquee() {
+  unsigned long now = millis();
+  if (now - lastMarqueeUpdate < MARQUEE_MS) return;
+  lastMarqueeUpdate = now;
+  
+  // Simple bounce animation
+  int x = 120 + (marqueePos * 2);
+  if (x > 200) marqueePos = -40;
+  if (x < 40) marqueePos = 40;
+  
+  tft.drawString(marqueeText, x, 120);
+  marqueePos++;
 }
 
 // ==========================================
