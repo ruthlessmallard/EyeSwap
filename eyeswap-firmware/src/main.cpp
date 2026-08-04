@@ -103,6 +103,15 @@ void loop() {
 void setupTFT() {
   Serial.println("TFT init starting...");
   
+  // Explicit SPI bus initialization for ESP32-S3
+  Serial.println("Initializing SPI bus...");
+  SPI.begin(14, -1, 13, 10);  // SCK=14, MISO=-1, MOSI=13, SS=10
+  SPI.setFrequency(40000000);  // 40MHz
+  SPI.setDataMode(SPI_MODE0);
+  SPI.setBitOrder(MSBFIRST);
+  
+  Serial.println("SPI bus initialized, starting TFT...");
+  
   // Initialize TFT
   tft.init();
   tft.setRotation(0);  // Round display, adjust if needed
