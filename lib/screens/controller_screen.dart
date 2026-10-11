@@ -6,6 +6,7 @@ import '../services/media_controller.dart';
 import '../services/ble_handler.dart';
 import 'settings_screen.dart';
 import 'battery_help_screen.dart';
+import 'permissions_screen.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -20,11 +21,42 @@ class _ControllerScreenState extends State<ControllerScreen> {
   String _displayText = 'EYESWAP';
   String _subText = 'SCANNING';
   bool _isScrolling = false;
+  // True until proven otherwise so missing special access is visible immediately.
+  bool _permissionsOk = false;
+  bool _startupPermissionPromptShown = false;
 
   @override
   void initState() {
     super.initState();
     _initializeBle();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAndPromptPermissions();
+    });
+  }
+
+  Future<bool> _refreshPermissionState() async {
+    final notificationAccess =
+        await _mediaController.isNotificationAccessEnabled();
+    final accessibilityService =
+        await _mediaController.isAccessibilityServiceEnabled();
+    if (!mounted) return false;
+    final allGranted = notificationAccess && accessibilityService;
+    setState(() => _permissionsOk = allGranted);
+    return allGranted;
+  }
+
+  Future<void> _checkAndPromptPermissions() async {
+    if (_startupPermissionPromptShown) return;
+    _startupPermissionPromptShown = true;
+    final allGranted = await _refreshPermissionState();
+    if (!mounted || allGranted) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => const PermissionsScreen(),
+      ),
+    );
+    await _refreshPermissionState();
   }
 
   @override
@@ -204,6 +236,34 @@ class _ControllerScreenState extends State<ControllerScreen> {
                     );
                   },
                   tooltip: 'Battery Help',
+                ),
+              ),
+              // Permissions indicator - next to battery help. Orange "!" when
+              // Notification Access / Accessibility are missing, green check
+              // when granted. Taps through to the setup screen.
+              Positioned(
+                top: 8,
+                left: 56,
+                child: IconButton(
+                  icon: Icon(
+                    _permissionsOk
+                        ? Icons.verified_user
+                        : Icons.warning_amber_rounded,
+                    color: _permissionsOk ? Colors.green : Colors.orange,
+                    size: 28,
+                  ),
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const PermissionsScreen(),
+                      ),
+                    );
+                    _refreshPermissionState();
+                  },
+                  tooltip: _permissionsOk
+                      ? 'Permissions OK'
+                      : 'Permissions needed',
                 ),
               ),
               // Main content
