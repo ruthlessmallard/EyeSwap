@@ -86,6 +86,7 @@ int npArtistWidth = 0;
 #define LIFE_W (240 / LIFE_CELL)
 #define LIFE_H (240 / LIFE_CELL)
 #define LIFE_BYTES ((LIFE_W * LIFE_H + 7) / 8)
+#define LIFE_MIN_POP_PCT 2              // reseed when population < this % of the field
 static uint8_t lifeBufA[LIFE_BYTES];
 static uint8_t lifeBufB[LIFE_BYTES];
 static uint8_t* lifeCur = lifeBufA;
@@ -474,8 +475,11 @@ void updateLife() {
   uint8_t* tmp = lifeCur; lifeCur = lifeNext; lifeNext = tmp;
   lifeSpr.pushSprite(0, 0);
 
-  // Soup died out or froze into a still life? Reseed.
-  if (changed == 0 || pop == 0) lifeSeed();
+  // Soup died, froze into a still life, or collapsed to a boring blinker-and-
+  // block residue (blinkers keep changing, so they'd dodge a freeze check).
+  // Reseed while there's still something worth watching.
+  const uint32_t minPop = ((uint32_t)LIFE_W * LIFE_H * LIFE_MIN_POP_PCT) / 100;
+  if (changed == 0 || pop < minPop) lifeSeed();
 }
 
 void lifeRepaint() {
