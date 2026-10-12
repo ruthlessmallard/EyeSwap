@@ -6,6 +6,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 class BleHandler {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _commandCharacteristic;
+  BluetoothCharacteristic? _configCharacteristic;
   
   // Callbacks - wire to button handlers
   VoidCallback? onButton1Press;
@@ -20,6 +21,7 @@ class BleHandler {
   static const String deviceName = 'EyeSwap';
   static const String serviceUuid = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
   static const String buttonCharUuid = 'a1e60244-960d-4d06-aca2-a2fc604f09be';
+  static const String configCharUuid = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
 
   Future<void> initialize() async {
     try {
@@ -51,24 +53,64 @@ class BleHandler {
       await FlutterBluePlus.stopScan();
       await device.connect();
       _device = device;
-      
+
+      // Larger MTU so now-playing metadata fits in a single write.
+      try {
+        await device.requestMtu(512);
+      } catch (e) {
+        developer.log('MTU request failed: $e', name: 'BleHandler');
+      }
+
       List<BluetoothService> services = await device.discoverServices();
       for (BluetoothService service in services) {
         if (service.uuid.toString().toLowerCase() == serviceUuid) {
           for (BluetoothCharacteristic char in service.characteristics) {
-            if (char.uuid.toString().toLowerCase() == buttonCharUuid) {
+            final uuid = char.uuid.toString().toLowerCase();
+            if (uuid == buttonCharUuid) {
               _commandCharacteristic = char;
               await char.setNotifyValue(true);
               char.value.listen(_handleCommand);
-              onDeviceConnected?.call();
-              developer.log('Connected to EyeSwap ESP32', name: 'BleHandler');
-              return;
+            } else if (uuid == configCharUuid) {
+              _configCharacteristic = char;
             }
           }
         }
       }
+
+      if (_commandCharacteristic != null) {
+        onDeviceConnected?.call();
+        developer.log('Connected to EyeSwap ESP32', name: 'BleHandler');
+      }
     } catch (e) {
       developer.log('Connection failed: $e', name: 'BleHandler');
+    }
+  }
+
+  /// Push now-playing metadata to the ESP32 (config characteristic, JSON).
+  Future<bool> sendNowPlaying(Map<String, dynamic> nowPlaying) async {
+    final characteristic = _configCharacteristic;
+    if (characteristic == null) return false;
+
+    // Keep the payload within a comfortable BLE write size.
+    String clamp(Object? value, int max) {
+      final s = (value ?? '').toString();
+      return s.length <= max ? s : s.substring(0, max);
+    }
+
+    final packet = jsonEncode({
+      'type': 'now_playing',
+      'title': clamp(nowPlaying['title'], 60),
+      'artist': clamp(nowPlaying['artist'], 40),
+      'state': clamp(nowPlaying['state'], 16),
+      'source': clamp(nowPlaying['source'], 40),
+    });
+
+    try {
+      await characteristic.write(utf8.encode(packet), withoutResponse: true);
+      return true;
+    } catch (e) {
+      developer.log('Now-playing write failed: $e', name: 'BleHandler');
+      return false;
     }
   }
 
@@ -122,6 +164,7 @@ class BleHandler {
       await _device?.disconnect();
       _device = null;
       _commandCharacteristic = null;
+      _configCharacteristic = null;
       onDeviceDisconnected?.call();
     } catch (e) {
       developer.log('Disconnect failed: $e', name: 'BleHandler');

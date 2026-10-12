@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/round_display.dart';
@@ -24,6 +25,8 @@ class _ControllerScreenState extends State<ControllerScreen> {
   // True until proven otherwise so missing special access is visible immediately.
   bool _permissionsOk = false;
   bool _startupPermissionPromptShown = false;
+  Timer? _nowPlayingTimer;
+  String _lastNowPlayingKey = '';
 
   @override
   void initState() {
@@ -32,6 +35,27 @@ class _ControllerScreenState extends State<ControllerScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAndPromptPermissions();
     });
+    // Poll media metadata every 4s; only changes are pushed to the hardware.
+    _nowPlayingTimer = Timer.periodic(
+      const Duration(seconds: 4),
+      (_) => _pollNowPlaying(),
+    );
+  }
+
+  Future<void> _pollNowPlaying() async {
+    final nowPlaying = await _mediaController.getNowPlaying();
+    if (!mounted) return;
+
+    final key = nowPlaying == null
+        ? 'none'
+        : '${nowPlaying['title']}|${nowPlaying['artist']}|${nowPlaying['state']}|${nowPlaying['source']}';
+    if (key == _lastNowPlayingKey) return;
+    _lastNowPlayingKey = key;
+
+    await _bleHandler.sendNowPlaying(
+      nowPlaying ??
+          const {'title': '', 'artist': '', 'state': 'stopped', 'source': ''},
+    );
   }
 
   Future<bool> _refreshPermissionState() async {
@@ -61,6 +85,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   @override
   void dispose() {
+    _nowPlayingTimer?.cancel();
     _bleHandler.disconnect();
     super.dispose();
   }
@@ -69,6 +94,9 @@ class _ControllerScreenState extends State<ControllerScreen> {
     await _bleHandler.initialize();
     _bleHandler.onDeviceConnected = () {
       _updateDisplay('EYESWAP', 'CONNECTED');
+      // Force a fresh push on connect so the display isn't stale.
+      _lastNowPlayingKey = '';
+      _pollNowPlaying();
     };
     _bleHandler.onDeviceDisconnected = () {
       _updateDisplay('EYESWAP', 'SCANNING');

@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
@@ -109,6 +110,9 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 }
                 "hasInternetConnection" -> {
                     result.success(hasInternetConnection())
+                }
+                "getNowPlaying" -> {
+                    result.success(getNowPlaying())
                 }
                 "isNotificationAccessEnabled" -> {
                     result.success(isNotificationAccessEnabled())
@@ -223,6 +227,42 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
             android.util.Log.e(TAG, "Failed to activate Gemini: ${e.message}")
             result.error("GEMINI_FAILED", "${e.message}", null)
         }
+    }
+
+    /**
+     * Read the current media session metadata (title/artist/state/source).
+     * Prefers a session that is actively playing. Returns null when there is
+     * no active session or no metadata. Requires Notification Access.
+     */
+    private fun getNowPlaying(): Map<String, Any?>? {
+        val sessions = getActiveMediaSessions()
+        if (sessions.isEmpty()) return null
+
+        val controller = sessions.firstOrNull {
+            it.playbackState?.state == PlaybackState.STATE_PLAYING
+        } ?: sessions.firstOrNull() ?: return null
+
+        val md = controller.metadata ?: return null
+        val title = md.getString(MediaMetadata.METADATA_KEY_TITLE)
+            ?: md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
+            ?: ""
+        val artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST)
+            ?: md.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
+            ?: ""
+        val state = when (controller.playbackState?.state) {
+            PlaybackState.STATE_PLAYING -> "playing"
+            PlaybackState.STATE_PAUSED -> "paused"
+            PlaybackState.STATE_BUFFERING -> "buffering"
+            PlaybackState.STATE_STOPPED -> "stopped"
+            else -> "unknown"
+        }
+
+        return mapOf(
+            "title" to title,
+            "artist" to artist,
+            "state" to state,
+            "source" to (controller.packageName ?: "")
+        )
     }
 
     /**
