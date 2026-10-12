@@ -61,7 +61,7 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR, MODE_STARFIELD };
+enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR, MODE_STARFIELD, MODE_OSC };
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -151,6 +151,14 @@ struct Star { float x, y, z, sp; int px, py; bool hadPos; };
 static Star stars[STAR_COUNT];
 static unsigned long lastStarUpdate = 0;
 
+// ==== Oscilloscope (MODE_OSC): Lissajous art with phosphor persistence ====
+// Reuses radarBuf (120x120 intensity); exclusive modes, so no extra RAM.
+static float oscT = 0.0f;      // beam parameter
+static float oscDelta = 0.0f;  // slowly drifting phase -> morphing figure
+static int oscPX = 0, oscPY = 0;
+static bool oscHad = false;
+static unsigned long lastOscUpdate = 0;
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -172,6 +180,8 @@ void radarInit();
 void updateRadar();
 void starInit();
 void updateStarfield();
+void oscInit();
+void updateOsc();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
@@ -208,6 +218,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "pipes") == 0)       { pendingMode = MODE_PIPES;       modeDirty = true; }
       else if (strcmp(anim, "radar") == 0)       { pendingMode = MODE_RADAR;       modeDirty = true; }
       else if (strcmp(anim, "starfield") == 0)   { pendingMode = MODE_STARFIELD;   modeDirty = true; }
+      else if (strcmp(anim, "oscilloscope") == 0 || strcmp(anim, "osc") == 0) { pendingMode = MODE_OSC; modeDirty = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -271,7 +282,7 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
-    if (savedMode > MODE_STARFIELD) savedMode = MODE_MARQUEE;
+    if (savedMode > MODE_OSC) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
@@ -489,6 +500,8 @@ void setDisplayMode(DisplayMode mode) {
     radarInit();
   } else if (mode == MODE_STARFIELD) {
     starInit();
+  } else if (mode == MODE_OSC) {
+    oscInit();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -1033,6 +1046,57 @@ void updateStarfield() {
   lifeSpr.pushSprite(0, 0);
 }
 
+// ==== Oscilloscope (MODE_OSC) ====
+void oscInit() {
+  randomSeed(esp_random());
+  memset(radarBuf, 0, sizeof(radarBuf));
+  oscT = 0.0f;
+  oscDelta = 0.0f;
+  oscHad = false;
+  lifeSpr.fillSprite(0);
+}
+
+void updateOsc() {
+  unsigned long now = millis();
+  if (now - lastOscUpdate < 25) return;
+  lastOscUpdate = now;
+
+  // Phosphor decay (same persistence trick as the radar).
+  for (int i = 0; i < RADAR_W * RADAR_H; i++) {
+    uint8_t v = radarBuf[i];
+    radarBuf[i] = (v > 9) ? (uint8_t)(v - 9) : 0;
+  }
+
+  // Graticule: dashed grid + brighter center axes, redrawn each frame.
+  for (int x = 20; x < 120; x += 20) radarLine(x, 6, x, 114, 42);
+  for (int y = 20; y < 120; y += 20) radarLine(6, y, 114, y, 42);
+  radarLine(60, 4, 60, 116, 88);
+  radarLine(4, 60, 116, 60, 88);
+
+  // Lissajous beam: x = A sin(3t + d), y = A sin(2t). Fixed 3:2 ratio with a
+  // slowly drifting phase d morphs the figure (line -> ellipse -> 8 -> ...).
+  oscT += 0.10f;
+  if (oscT > 6.28318f) oscT -= 6.28318f;
+  oscDelta += 0.008f;
+  if (oscDelta > 6.28318f) oscDelta -= 6.28318f;
+  int xi = 60 + (int)lroundf(40.0f * sinf(3.0f * oscT + oscDelta));
+  int yi = 60 + (int)lroundf(40.0f * sinf(2.0f * oscT));
+  if (oscHad) radarLine(oscPX, oscPY, xi, yi, 255);
+  else        radarPlot(xi, yi, 255);
+  oscPX = xi; oscPY = yi; oscHad = true;
+
+  // Dither the intensity field into the shared 1bpp sprite at 2x2 blocks.
+  lifeSpr.fillSprite(0);
+  for (int y = 0; y < RADAR_H; y++) {
+    for (int x = 0; x < RADAR_W; x++) {
+      uint8_t v = radarBuf[y * RADAR_W + x];
+      uint8_t t = (uint8_t)(BAYER4[y & 3][x & 3] * 16 + 8);
+      if (v > t) lifeSpr.fillRect(x * LIFE_CELL, y * LIFE_CELL, LIFE_CELL, LIFE_CELL, 1);
+    }
+  }
+  lifeSpr.pushSprite(0, 0);
+}
+
 void renderDisplay() {
   switch (displayMode) {
     case MODE_MARQUEE:     updateMarquee(); break;
@@ -1044,6 +1108,7 @@ void renderDisplay() {
     case MODE_PIPES:       updatePipes(); break;
     case MODE_RADAR:       updateRadar(); break;
     case MODE_STARFIELD:   updateStarfield(); break;
+    case MODE_OSC:         updateOsc(); break;
   }
 }
 
