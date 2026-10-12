@@ -1047,6 +1047,18 @@ void updateStarfield() {
 }
 
 // ==== Oscilloscope (MODE_OSC) ====
+// Beam stroke: a 3-cell-wide bright line so the trace clearly outranks the grid.
+static void oscStroke(int x0, int y0, int x1, int y1) {
+  radarLine(x0, y0, x1, y1, 255);
+  float dx = x1 - x0, dy = y1 - y0;
+  float len = sqrtf(dx * dx + dy * dy) + 0.001f;
+  float px = -dy / len, py = dx / len;
+  radarLine(x0 + (int)lroundf(px), y0 + (int)lroundf(py),
+            x1 + (int)lroundf(px), y1 + (int)lroundf(py), 255);
+  radarLine(x0 - (int)lroundf(px), y0 - (int)lroundf(py),
+            x1 - (int)lroundf(px), y1 - (int)lroundf(py), 255);
+}
+
 void oscInit() {
   randomSeed(esp_random());
   memset(radarBuf, 0, sizeof(radarBuf));
@@ -1067,11 +1079,11 @@ void updateOsc() {
     radarBuf[i] = (v > 9) ? (uint8_t)(v - 9) : 0;
   }
 
-  // Graticule: dashed grid + brighter center axes, redrawn each frame.
-  for (int x = 20; x < 120; x += 20) radarLine(x, 6, x, 114, 42);
-  for (int y = 20; y < 120; y += 20) radarLine(6, y, 114, y, 42);
-  radarLine(60, 4, 60, 116, 88);
-  radarLine(4, 60, 116, 60, 88);
+  // Graticule: faint dashed grid + modest center axes (kept well under the beam).
+  for (int x = 20; x < 120; x += 20) radarLine(x, 6, x, 114, 24);
+  for (int y = 20; y < 120; y += 20) radarLine(6, y, 114, y, 24);
+  radarLine(60, 4, 60, 116, 48);
+  radarLine(4, 60, 116, 60, 48);
 
   // Lissajous beam: x = A sin(3t + d), y = A sin(2t). Fixed 3:2 ratio with a
   // slowly drifting phase d morphs the figure (line -> ellipse -> 8 -> ...).
@@ -1081,7 +1093,7 @@ void updateOsc() {
   if (oscDelta > 6.28318f) oscDelta -= 6.28318f;
   int xi = 60 + (int)lroundf(40.0f * sinf(3.0f * oscT + oscDelta));
   int yi = 60 + (int)lroundf(40.0f * sinf(2.0f * oscT));
-  if (oscHad) radarLine(oscPX, oscPY, xi, yi, 255);
+  if (oscHad) oscStroke(oscPX, oscPY, xi, yi);
   else        radarPlot(xi, yi, 255);
   oscPX = xi; oscPY = yi; oscHad = true;
 
