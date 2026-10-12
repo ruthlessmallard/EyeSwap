@@ -61,7 +61,7 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT };
+enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE };
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -117,6 +117,12 @@ static uint8_t antGrid[LIFE_BYTES];
 static int antX, antY, antDir;   // dir: 0=N 1=E 2=S 3=W
 static unsigned long lastAntUpdate = 0;
 
+// ==== Fire (MODE_FIRE): classic heat-field flame, half-res, dithered ====
+#define FIRE_W LIFE_W
+#define FIRE_H LIFE_H
+static uint8_t fireHeat[FIRE_W * FIRE_H];   // 120x120 heat, 0..255
+static unsigned long lastFireUpdate = 0;
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -130,6 +136,8 @@ void boidInit();
 void updateBoids();
 void antInit();
 void updateAnt();
+void fireInit();
+void updateFire();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
@@ -162,6 +170,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "now_playing") == 0) { pendingMode = MODE_NOW_PLAYING; modeDirty = true; }
       else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
       else if (strcmp(anim, "ant") == 0)         { pendingMode = MODE_ANT;         modeDirty = true; }
+      else if (strcmp(anim, "fire") == 0)        { pendingMode = MODE_FIRE;        modeDirty = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -225,7 +234,7 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
-    if (savedMode > MODE_ANT) savedMode = MODE_MARQUEE;
+    if (savedMode > MODE_FIRE) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
@@ -435,6 +444,8 @@ void setDisplayMode(DisplayMode mode) {
     boidInit();
   } else if (mode == MODE_ANT) {
     antInit();
+  } else if (mode == MODE_FIRE) {
+    fireInit();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -640,6 +651,64 @@ void updateAnt() {
   lifeSpr.pushSprite(0, 0);
 }
 
+// ==== Fire (MODE_FIRE) ====
+// 4x4 ordered-dither threshold: turns the 8-bit heat field into 1bpp shading,
+// so hot regions read solid/bright and cooler regions sparse/dim.
+static const uint8_t BAYER4[4][4] = {
+  { 0,  8,  2, 10},
+  {12,  4, 14,  6},
+  { 3, 11,  1,  9},
+  {15,  7, 13,  5}
+};
+
+void fireInit() {
+  randomSeed(esp_random());
+  memset(fireHeat, 0, sizeof(fireHeat));
+  for (int x = 0; x < FIRE_W; x++) {
+    int v = 150 + random(106);
+    if (random(100) < 12) v = random(20, 80);   // ragged fuel bed
+    fireHeat[(FIRE_H - 1) * FIRE_W + x] = (uint8_t)v;
+  }
+  lifeSpr.fillSprite(0);
+}
+
+void updateFire() {
+  unsigned long now = millis();
+  if (now - lastFireUpdate < 40) return;
+  lastFireUpdate = now;
+
+  // Re-fuel the bottom row every frame, with occasional cool gaps.
+  for (int x = 0; x < FIRE_W; x++) {
+    int v = 160 + random(96);
+    if (random(100) < 10) v = random(20, 90);
+    fireHeat[(FIRE_H - 1) * FIRE_W + x] = (uint8_t)v;
+  }
+
+  // Rise: each cell = average of the three below it, minus cooling.
+  for (int y = 0; y < FIRE_H - 1; y++) {
+    for (int x = 0; x < FIRE_W; x++) {
+      int xl = (x == 0) ? FIRE_W - 1 : x - 1;
+      int xr = (x == FIRE_W - 1) ? 0 : x + 1;
+      int below = (y + 1) * FIRE_W;
+      int v = (fireHeat[below + xl] + fireHeat[below + x] + fireHeat[below + xr]) / 3;
+      v -= 1 + random(3);
+      if (v < 0) v = 0;
+      fireHeat[y * FIRE_W + x] = (uint8_t)v;
+    }
+  }
+
+  // Dither into the shared 1bpp sprite at 2x2 blocks.
+  lifeSpr.fillSprite(0);
+  for (int y = 0; y < FIRE_H; y++) {
+    for (int x = 0; x < FIRE_W; x++) {
+      uint8_t h = fireHeat[y * FIRE_W + x];
+      uint8_t t = (uint8_t)(BAYER4[y & 3][x & 3] * 16 + 8);
+      if (h > t) lifeSpr.fillRect(x * LIFE_CELL, y * LIFE_CELL, LIFE_CELL, LIFE_CELL, 1);
+    }
+  }
+  lifeSpr.pushSprite(0, 0);
+}
+
 void renderDisplay() {
   switch (displayMode) {
     case MODE_MARQUEE:     updateMarquee(); break;
@@ -647,6 +716,7 @@ void renderDisplay() {
     case MODE_NOW_PLAYING: updateNowPlaying(); break;
     case MODE_BOIDS:       updateBoids(); break;
     case MODE_ANT:         updateAnt(); break;
+    case MODE_FIRE:        updateFire(); break;
   }
 }
 
