@@ -105,19 +105,6 @@ Located in `eyeswap-firmware/` directory. PlatformIO / Arduino ESP32-S3 firmware
 // ESP32 → App (disconnected from phone)
 {"type":"status","state":"searching"}
 ```
-
-**Boot ASCII Art (240x240 GC9A01):**
-```
-       _____                _   
-      | ____|__ _ _ __   __| |  
-      |  _| / _` | '_ \ / _` |  
-      | |__| (_| | | | | (_| |  
-      |_____\__, |_| |_|\__,_|  
-            |___/               
-
         WELCOME TO EYESWAP
          [SEARCHING...]
-```
-Display this centered on boot. Switch to clock + animation mode after app connects and sends `{"type":"init"}`.
-
 **Not your mother. Operate responsibly.**
