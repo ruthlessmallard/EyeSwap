@@ -581,10 +581,19 @@ void updateBoids() {
   lifeSpr.fillSprite(0);
   for (int i = 0; i < BOID_COUNT; i++) {
     Boid* b = &boids[i];
-    int x = (int)b->x, y = (int)b->y;
-    int tx = (int)(b->x - b->vx * 5), ty = (int)(b->y - b->vy * 5);
-    lifeSpr.drawLine(tx, ty, x, y, 1);   // heading streak
-    lifeSpr.fillRect(x - 1, y - 1, 3, 3, 1);
+    // Arrowhead pointing along heading: tip forward, two swept-back base corners.
+    float sp = sqrtf(b->vx * b->vx + b->vy * b->vy);
+    float fx = 1.0f, fy = 0.0f;
+    if (sp > 0.001f) { fx = b->vx / sp; fy = b->vy / sp; }
+    float px = -fy, py = fx;               // unit perpendicular
+    const float L = 5.0f, W = 2.8f;        // arrow length / base half-width
+    int tipx = (int)lroundf(b->x + fx * L);
+    int tipy = (int)lroundf(b->y + fy * L);
+    int lx = (int)lroundf(b->x - fx * 1.5f + px * W);
+    int ly = (int)lroundf(b->y - fy * 1.5f + py * W);
+    int rx = (int)lroundf(b->x - fx * 1.5f - px * W);
+    int ry = (int)lroundf(b->y - fy * 1.5f - py * W);
+    lifeSpr.fillTriangle(tipx, tipy, lx, ly, rx, ry, 1);
   }
   lifeSpr.pushSprite(0, 0);
 }
