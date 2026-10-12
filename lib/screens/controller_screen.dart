@@ -58,6 +58,19 @@ class _ControllerScreenState extends State<ControllerScreen> {
     );
   }
 
+  /// Re-push the saved display settings (mode, brightness, color) on connect.
+  Future<void> _pushSavedDisplaySettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final animation = prefs.getString('idle_animation') ?? 'marquee';
+    final brightness = prefs.getInt('brightness_offset') ?? 0;
+    final colorHex = prefs.getString('bg_color') ?? 'FFAA00';
+    await _bleHandler.sendDisplayConfig(
+      brightnessOffset: brightness,
+      colorHex: colorHex,
+    );
+    await _bleHandler.sendMode(animation);
+  }
+
   Future<bool> _refreshPermissionState() async {
     final notificationAccess =
         await _mediaController.isNotificationAccessEnabled();
@@ -94,6 +107,8 @@ class _ControllerScreenState extends State<ControllerScreen> {
     await _bleHandler.initialize();
     _bleHandler.onDeviceConnected = () {
       _updateDisplay('EYESWAP', 'CONNECTED');
+      // Re-push the saved display settings so the pod resumes the last choice.
+      _pushSavedDisplaySettings();
       // Force a fresh push on connect so the display isn't stale.
       _lastNowPlayingKey = '';
       _pollNowPlaying();

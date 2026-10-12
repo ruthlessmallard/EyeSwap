@@ -114,6 +114,44 @@ class BleHandler {
     }
   }
 
+  /// Push idle-animation mode to the ESP32 (config characteristic, JSON).
+  Future<bool> sendMode(String animation) async {
+    final characteristic = _configCharacteristic;
+    if (characteristic == null) return false;
+
+    try {
+      final packet = jsonEncode({'type': 'mode', 'animation': animation});
+      await characteristic.write(utf8.encode(packet), withoutResponse: true);
+      return true;
+    } catch (e) {
+      developer.log('Mode write failed: $e', name: 'BleHandler');
+      return false;
+    }
+  }
+
+  /// Push display config (brightness offset + color) to the ESP32.
+  Future<bool> sendDisplayConfig({
+    required int brightnessOffset,
+    required String colorHex,
+  }) async {
+    final characteristic = _configCharacteristic;
+    if (characteristic == null) return false;
+
+    final brightness = brightnessOffset.clamp(-50, 50);
+    try {
+      final packet = jsonEncode({
+        'type': 'config',
+        'brightness_offset': brightness,
+        'bg_color': colorHex.toUpperCase(),
+      });
+      await characteristic.write(utf8.encode(packet), withoutResponse: true);
+      return true;
+    } catch (e) {
+      developer.log('Config write failed: $e', name: 'BleHandler');
+      return false;
+    }
+  }
+
   void _handleCommand(List<int> data) {
     if (data.isEmpty) return;
     

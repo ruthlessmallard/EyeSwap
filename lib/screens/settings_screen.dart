@@ -54,6 +54,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _idleAnimation = prefs.getString('idle_animation') ?? 'marquee';
+      _brightnessOffset = prefs.getDouble('brightness_offset') ?? 0;
+      final hex = prefs.getString('bg_color') ?? 'FFAA00';
+      _selectedColor = Color(int.parse('FF$hex', radix: 16));
     });
   }
   
@@ -99,6 +102,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _isSending = true;
     });
     
+    // Remember the last applied settings.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('brightness_offset', _brightnessOffset.toInt());
+    await prefs.setString(
+      'bg_color',
+      '${_selectedColor.red.toRadixString(16).padLeft(2, '0')}'
+      '${_selectedColor.green.toRadixString(16).padLeft(2, '0')}'
+      '${_selectedColor.blue.toRadixString(16).padLeft(2, '0')}',
+    );
+
     final success = await _bleService.sendConfig(
       brightnessOffset: _brightnessOffset.toInt(),
       color: _selectedColor,

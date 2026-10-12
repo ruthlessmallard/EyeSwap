@@ -11,6 +11,7 @@
 #include <BLE2902.h>
 #include <TFT_eSPI.h>
 #include "esp_system.h"
+#include <Preferences.h>
 #include <SPI.h>
 #include <ArduinoJson.h>
 #include <string.h>
@@ -101,6 +102,9 @@ volatile bool modeDirty = false;
 volatile bool configDirty = false;
 volatile bool npDirty = false;
 
+// Display settings persist across power cycles (NVS).
+Preferences prefs;
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -113,6 +117,7 @@ void updateLife();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
+void saveDisplaySettings();
 void drawNowPlaying();
 void updateNowPlaying();
 void sendButtonCommand(int btnNum, bool longPress);
@@ -196,6 +201,22 @@ void setup() {
 
   setupTFT();
   setupButtons();
+
+  // Restore last display settings from NVS so the pod survives power cycles.
+  prefs.begin("eyeswap", false);
+  {
+    DisplayMode savedMode =
+        (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
+    if (savedMode > MODE_NOW_PLAYING) savedMode = MODE_MARQUEE;
+    displayMode = savedMode;
+    brightnessOffset = prefs.getInt("bright", 0);
+    baseR = prefs.getUChar("cr", 0xFF);
+    baseG = prefs.getUChar("cg", 0xBF);
+    baseB = prefs.getUChar("cb", 0x00);
+  }
+  applyDisplayColor();
+  setDisplayMode(displayMode);
+
   setupBLE();
 
   Serial.println("Setup complete - waiting for BLE connection...");
@@ -208,6 +229,7 @@ void loop() {
   if (configDirty) {
     configDirty = false;
     applyDisplayColor();
+    saveDisplaySettings();
     if (displayMode == MODE_NOW_PLAYING) drawNowPlaying();
     else if (displayMode == MODE_STATIC) lifeRepaint();
   }
@@ -367,8 +389,17 @@ void updateNowPlaying() {
   }
 }
 
+void saveDisplaySettings() {
+  prefs.putUChar("mode", (uint8_t)displayMode);
+  prefs.putInt("bright", brightnessOffset);
+  prefs.putUChar("cr", baseR);
+  prefs.putUChar("cg", baseG);
+  prefs.putUChar("cb", baseB);
+}
+
 void setDisplayMode(DisplayMode mode) {
   displayMode = mode;
+  saveDisplaySettings();
   marqueePos = 0;
   lastMarqueeUpdate = 0;
   tft.fillScreen(TFT_BLACK);
