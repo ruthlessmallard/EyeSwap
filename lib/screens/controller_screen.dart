@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/round_display.dart';
@@ -6,6 +7,7 @@ import '../services/media_controller.dart';
 import '../services/ble_handler.dart';
 import 'settings_screen.dart';
 import 'battery_help_screen.dart';
+import 'permissions_screen.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -20,15 +22,70 @@ class _ControllerScreenState extends State<ControllerScreen> {
   String _displayText = 'EYESWAP';
   String _subText = 'SCANNING';
   bool _isScrolling = false;
+  // True until proven otherwise so missing special access is visible immediately.
+  bool _permissionsOk = false;
+  bool _startupPermissionPromptShown = false;
+  Timer? _nowPlayingTimer;
+  String _lastNowPlayingKey = '';
 
   @override
   void initState() {
     super.initState();
     _initializeBle();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAndPromptPermissions();
+    });
+    // Poll media metadata every 4s; only changes are pushed to the hardware.
+    _nowPlayingTimer = Timer.periodic(
+      const Duration(seconds: 4),
+      (_) => _pollNowPlaying(),
+    );
+  }
+
+  Future<void> _pollNowPlaying() async {
+    final nowPlaying = await _mediaController.getNowPlaying();
+    if (!mounted) return;
+
+    final key = nowPlaying == null
+        ? 'none'
+        : '${nowPlaying['title']}|${nowPlaying['artist']}|${nowPlaying['state']}|${nowPlaying['source']}';
+    if (key == _lastNowPlayingKey) return;
+    _lastNowPlayingKey = key;
+
+    await _bleHandler.sendNowPlaying(
+      nowPlaying ??
+          const {'title': '', 'artist': '', 'state': 'stopped', 'source': ''},
+    );
+  }
+
+  Future<bool> _refreshPermissionState() async {
+    final notificationAccess =
+        await _mediaController.isNotificationAccessEnabled();
+    final accessibilityService =
+        await _mediaController.isAccessibilityServiceEnabled();
+    if (!mounted) return false;
+    final allGranted = notificationAccess && accessibilityService;
+    setState(() => _permissionsOk = allGranted);
+    return allGranted;
+  }
+
+  Future<void> _checkAndPromptPermissions() async {
+    if (_startupPermissionPromptShown) return;
+    _startupPermissionPromptShown = true;
+    final allGranted = await _refreshPermissionState();
+    if (!mounted || allGranted) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => const PermissionsScreen(),
+      ),
+    );
+    await _refreshPermissionState();
   }
 
   @override
   void dispose() {
+    _nowPlayingTimer?.cancel();
     _bleHandler.disconnect();
     super.dispose();
   }
@@ -37,6 +94,9 @@ class _ControllerScreenState extends State<ControllerScreen> {
     await _bleHandler.initialize();
     _bleHandler.onDeviceConnected = () {
       _updateDisplay('EYESWAP', 'CONNECTED');
+      // Force a fresh push on connect so the display isn't stale.
+      _lastNowPlayingKey = '';
+      _pollNowPlaying();
     };
     _bleHandler.onDeviceDisconnected = () {
       _updateDisplay('EYESWAP', 'SCANNING');
@@ -204,6 +264,34 @@ class _ControllerScreenState extends State<ControllerScreen> {
                     );
                   },
                   tooltip: 'Battery Help',
+                ),
+              ),
+              // Permissions indicator - next to battery help. Orange "!" when
+              // Notification Access / Accessibility are missing, green check
+              // when granted. Taps through to the setup screen.
+              Positioned(
+                top: 8,
+                left: 56,
+                child: IconButton(
+                  icon: Icon(
+                    _permissionsOk
+                        ? Icons.verified_user
+                        : Icons.warning_amber_rounded,
+                    color: _permissionsOk ? Colors.green : Colors.orange,
+                    size: 28,
+                  ),
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const PermissionsScreen(),
+                      ),
+                    );
+                    _refreshPermissionState();
+                  },
+                  tooltip: _permissionsOk
+                      ? 'Permissions OK'
+                      : 'Permissions needed',
                 ),
               ),
               // Main content

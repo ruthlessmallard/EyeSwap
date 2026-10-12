@@ -63,8 +63,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _idleAnimation = animation;
     });
-    // TODO: Send to ESP32 when connected
-    _setStatus('Idle animation: $animation');
+
+    // Push the mode to the hardware. If it isn't connected yet, the choice is
+    // still saved and applied on the next connect.
+    final sent = await _bleService.sendIdleAnimation(animation);
+    if (sent) {
+      _setStatus('Idle animation: $animation');
+    } else {
+      _setStatus('Saved. Connect to EyeSwap to apply.');
+    }
   }
 
   @override

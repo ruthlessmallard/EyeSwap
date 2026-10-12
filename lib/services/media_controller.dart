@@ -63,6 +63,21 @@ class MediaController {
     }
   }
   
+  /// Read the current media session metadata for the "now playing" display.
+  /// Returns null when there is no active session. Requires Notification Access.
+  Future<Map<String, dynamic>?> getNowPlaying() async {
+    try {
+      final result = await _channel.invokeMethod('getNowPlaying');
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return null;
+    } catch (e) {
+      developer.log('Error getting now playing: $e', name: 'EyeSwap');
+      return null;
+    }
+  }
+
   /// Open notification access settings
   Future<void> openNotificationSettings() async {
     try {
