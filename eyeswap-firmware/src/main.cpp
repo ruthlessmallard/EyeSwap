@@ -61,7 +61,7 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE };
+enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES };
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -124,6 +124,17 @@ static uint8_t fireHeat[FIRE_W * FIRE_H];   // 120x120 heat, 0..255
 static unsigned long lastFireUpdate = 0;
 static float firePhase = 0.0f;
 
+// ==== Pipes (MODE_PIPES): phosphor 3D tube maze on a lattice ====
+#define PIPE_COUNT 5
+#define PIPE_N 7                     // lattice nodes per axis
+struct Pipe { int x, y, z, dx, dy, dz, steps, maxSteps; bool alive; };
+static Pipe pipes[PIPE_COUNT];
+static int pipesAlive = 0;
+static unsigned long lastPipeUpdate = 0;
+static unsigned long pipesRespawnAt = 0;
+static float pipeCosY, pipeSinY, pipeCosP, pipeSinP;
+#define PIPE_SCALE 19.0f
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -139,6 +150,8 @@ void antInit();
 void updateAnt();
 void fireInit();
 void updateFire();
+void pipesInit();
+void updatePipes();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
@@ -172,6 +185,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
       else if (strcmp(anim, "ant") == 0)         { pendingMode = MODE_ANT;         modeDirty = true; }
       else if (strcmp(anim, "fire") == 0)        { pendingMode = MODE_FIRE;        modeDirty = true; }
+      else if (strcmp(anim, "pipes") == 0)       { pendingMode = MODE_PIPES;       modeDirty = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -235,7 +249,7 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
-    if (savedMode > MODE_FIRE) savedMode = MODE_MARQUEE;
+    if (savedMode > MODE_PIPES) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
@@ -447,6 +461,8 @@ void setDisplayMode(DisplayMode mode) {
     antInit();
   } else if (mode == MODE_FIRE) {
     fireInit();
+  } else if (mode == MODE_PIPES) {
+    pipesInit();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -723,6 +739,120 @@ void updateFire() {
   lifeSpr.pushSprite(0, 0);
 }
 
+// ==== Pipes (MODE_PIPES) ====
+static const int PIPE_DIRS[6][3] = {
+  { 1, 0, 0}, {-1, 0, 0}, { 0, 1, 0}, { 0,-1, 0}, { 0, 0, 1}, { 0, 0,-1}
+};
+
+// Fixed 3/4 view: yaw -30 deg, pitch ~25 deg, orthographic.
+static void pipeProject(float xi, float yi, float zi, int* sx, int* sy, float* depth) {
+  const float c = (PIPE_N - 1) * 0.5f;
+  float x = xi - c, y = yi - c, z = c - zi;          // z up
+  float xr = x * pipeCosY - y * pipeSinY;
+  float yr = x * pipeSinY + y * pipeCosY;
+  float yy = yr * pipeCosP - z * pipeSinP;           // screen up
+  float dd = yr * pipeSinP + z * pipeCosP;           // toward viewer
+  *sx = 120 + (int)lroundf(xr * PIPE_SCALE);
+  *sy = 120 - (int)lroundf(yy * PIPE_SCALE);
+  *depth = dd;
+}
+
+static int pipeRadius(float d) {
+  if (d > 1.2f) return 3;           // near: fat
+  if (d < -1.2f) return 1;          // far: thin
+  return 2;
+}
+
+// mode 0: any valid direction; mode 1: elbow turn (no straight/reverse).
+static void pipePickDir(Pipe* p, bool turn) {
+  for (int tries = 0; tries < 12; tries++) {
+    int k = random(6);
+    const int* d = PIPE_DIRS[k];
+    bool straight = (d[0] == p->dx && d[1] == p->dy && d[2] == p->dz);
+    bool reverse  = (d[0] == -p->dx && d[1] == -p->dy && d[2] == -p->dz);
+    if (turn && (straight || reverse)) continue;
+    if (!turn && reverse) continue;
+    int nx = p->x + d[0], ny = p->y + d[1], nz = p->z + d[2];
+    if (nx < 0 || nx >= PIPE_N || ny < 0 || ny >= PIPE_N || nz < 0 || nz >= PIPE_N) continue;
+    p->dx = d[0]; p->dy = d[1]; p->dz = d[2];
+    return;
+  }
+  p->alive = false;   // boxed in
+}
+
+void pipesInit() {
+  randomSeed(esp_random());
+  pipeCosY = cosf(-0.52f); pipeSinY = sinf(-0.52f);
+  pipeCosP = cosf(0.44f);  pipeSinP = sinf(0.44f);
+  lifeSpr.fillSprite(0);
+  pipesAlive = 0;
+  for (int i = 0; i < PIPE_COUNT; i++) {
+    Pipe* p = &pipes[i];
+    p->x = random(PIPE_N); p->y = random(PIPE_N); p->z = random(PIPE_N);
+    p->steps = 0; p->maxSteps = 28 + random(36);
+    p->dx = p->dy = p->dz = 0;
+    p->alive = true;
+    pipePickDir(p, false);
+    if (!p->alive) continue;
+    pipesAlive++;
+    int sx, sy; float d;
+    pipeProject(p->x, p->y, p->z, &sx, &sy, &d);
+    lifeSpr.fillCircle(sx, sy, pipeRadius(d), 1);
+  }
+  lifeSpr.pushSprite(0, 0);
+}
+
+void updatePipes() {
+  unsigned long now = millis();
+  if (pipesAlive == 0) {
+    if (pipesRespawnAt == 0 || now >= pipesRespawnAt) pipesInit();
+    return;
+  }
+  if (now - lastPipeUpdate < 70) return;
+  lastPipeUpdate = now;
+
+  for (int i = 0; i < PIPE_COUNT; i++) {
+    Pipe* p = &pipes[i];
+    if (!p->alive) continue;
+
+    bool turned = false;
+    if (random(100) < 26) {
+      pipePickDir(p, true);            // elbow
+      turned = true;
+    } else {
+      int nx = p->x + p->dx, ny = p->y + p->dy, nz = p->z + p->dz;
+      if (nx < 0 || nx >= PIPE_N || ny < 0 || ny >= PIPE_N || nz < 0 || nz >= PIPE_N)
+        pipePickDir(p, false);         // wall ahead: try any way out
+    }
+    if (!p->alive) { pipesAlive--; continue; }
+
+    int nx = p->x + p->dx, ny = p->y + p->dy, nz = p->z + p->dz;
+    int x0, y0, x1, y1; float d0, d1;
+    pipeProject(p->x, p->y, p->z, &x0, &y0, &d0);
+    pipeProject(nx, ny, nz, &x1, &y1, &d1);
+
+    // Depth shading: near runs fat, far runs thin (1bpp phosphor look).
+    float dmid = d0 + d1;
+    int thick = (dmid > 1.0f) ? 3 : ((dmid < -1.0f) ? 1 : 2);
+    float dx = x1 - x0, dy = y1 - y0;
+    float len = sqrtf(dx * dx + dy * dy) + 0.001f;
+    float px = -dy / len, py = dx / len;
+    for (int k = -(thick / 2); k <= thick / 2; k++)
+      lifeSpr.drawLine(x0 + (int)lroundf(px * k), y0 + (int)lroundf(py * k),
+                       x1 + (int)lroundf(px * k), y1 + (int)lroundf(py * k), 1);
+    if (turned) lifeSpr.fillCircle(x0, y0, thick + 1, 1);   // joint sphere
+
+    p->x = nx; p->y = ny; p->z = nz; p->steps++;
+    if (p->steps >= p->maxSteps) {
+      lifeSpr.fillCircle(x1, y1, thick, 1);                  // end cap
+      p->alive = false;
+      pipesAlive--;
+    }
+  }
+  lifeSpr.pushSprite(0, 0);
+  if (pipesAlive == 0) pipesRespawnAt = millis() + 1600;
+}
+
 void renderDisplay() {
   switch (displayMode) {
     case MODE_MARQUEE:     updateMarquee(); break;
@@ -731,6 +861,7 @@ void renderDisplay() {
     case MODE_BOIDS:       updateBoids(); break;
     case MODE_ANT:         updateAnt(); break;
     case MODE_FIRE:        updateFire(); break;
+    case MODE_PIPES:       updatePipes(); break;
   }
 }
 
