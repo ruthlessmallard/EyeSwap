@@ -61,7 +61,7 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_PONG };
+enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_PONG, MODE_EQ };
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -171,6 +171,14 @@ static float pongBallX, pongBallY, pongBallVX, pongBallVY;
 static int pongScoreL = 0, pongScoreR = 0, pongServeDelay = 0, pongFrame = 0;
 static unsigned long lastPongUpdate = 0;
 
+// ==== EQ fake (MODE_EQ): spectrum bars driven by a synthetic beat ====
+#define EQ_BARS 14
+static float eqLevel[EQ_BARS], eqTarget[EQ_BARS], eqPeak[EQ_BARS];
+static int eqX[EQ_BARS], eqBaseY[EQ_BARS], eqMaxH[EQ_BARS];
+static float eqT = 0.0f;
+static int eqBeatCount = -1;
+static unsigned long lastEqUpdate = 0;
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -196,6 +204,8 @@ void oscInit();
 void updateOsc();
 void pongInit();
 void updatePong();
+void eqInit();
+void updateEq();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
@@ -234,6 +244,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "starfield") == 0)   { pendingMode = MODE_STARFIELD;   modeDirty = true; }
       else if (strcmp(anim, "oscilloscope") == 0 || strcmp(anim, "osc") == 0) { pendingMode = MODE_OSC; modeDirty = true; }
       else if (strcmp(anim, "pong") == 0)        { pendingMode = MODE_PONG;        modeDirty = true; }
+      else if (strcmp(anim, "eq") == 0)          { pendingMode = MODE_EQ;          modeDirty = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -297,7 +308,7 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
-    if (savedMode > MODE_PONG) savedMode = MODE_MARQUEE;
+    if (savedMode > MODE_EQ) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
@@ -519,6 +530,8 @@ void setDisplayMode(DisplayMode mode) {
     oscInit();
   } else if (mode == MODE_PONG) {
     pongInit();
+  } else if (mode == MODE_EQ) {
+    eqInit();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -1252,6 +1265,76 @@ void updatePong() {
   lifeSpr.pushSprite(0, 0);
 }
 
+// ==== EQ fake (MODE_EQ) ====
+// Bars fan out across the face, bottoms sitting on the bezel arc.
+void eqInit() {
+  randomSeed(esp_random());
+  eqT = 0.0f;
+  eqBeatCount = -1;
+  const float R = 116.0f;
+  for (int i = 0; i < EQ_BARS; i++) {
+    int x = 16 + i * 16;                       // bar left edge, 8 px wide
+    int c = x + 4;
+    float dx = fabsf((float)c - 120.0f);
+    float dy = sqrtf(R * R - dx * dx);
+    eqX[i] = x;
+    eqBaseY[i] = (int)(120.0f + dy - 6.0f);    // just inside the bezel
+    int h = (int)(2.0f * dy - 12.0f);          // full chord headroom
+    if (h > 150) h = 150;
+    eqMaxH[i] = h;
+    eqLevel[i] = eqTarget[i] = eqPeak[i] = 0.0f;
+  }
+  lifeSpr.fillSprite(0);
+}
+
+void updateEq() {
+  unsigned long now = millis();
+  if (now - lastEqUpdate < 30) return;
+  lastEqUpdate = now;
+  eqT += 0.03f;
+
+  // Band targets: bass slow and punchy, highs fast and fluttery.
+  for (int i = 0; i < EQ_BARS; i++) {
+    float f = 1.2f + i * 0.45f;
+    float v = 0.22f + 0.58f * fabsf(sinf(eqT * f + i * 1.7f)) + 0.20f * (random(101) / 100.0f);
+    if (v > 1.0f) v = 1.0f;
+    eqTarget[i] = v;
+  }
+
+  // Synthetic beat: kick every ~0.5 s with a wandering period. Applied after
+  // target computation so the thump actually lands.
+  float period = 0.52f + 0.12f * sinf(eqT * 0.31f);
+  int beat = (int)(eqT / period);
+  if (beat != eqBeatCount) {
+    eqBeatCount = beat;
+    for (int i = 0; i < 5; i++) eqTarget[i] = 1.0f;   // bass thump
+    if ((beat & 3) == 2) eqTarget[6] = 1.0f;          // backbeat snare
+  }
+
+  // Level dynamics: fast attack, slow decay. Peak hold falls slowly.
+  for (int i = 0; i < EQ_BARS; i++) {
+    if (eqTarget[i] > eqLevel[i]) eqLevel[i] += (eqTarget[i] - eqLevel[i]) * 0.55f;
+    else { eqLevel[i] -= 0.05f; if (eqLevel[i] < 0) eqLevel[i] = 0; }
+    if (eqLevel[i] >= eqPeak[i]) eqPeak[i] = eqLevel[i];
+    else { eqPeak[i] -= 0.008f; if (eqPeak[i] < 0) eqPeak[i] = 0; }
+  }
+
+  // Draw: segmented LED bars (3 on, 1 gap) + peak-hold cap.
+  lifeSpr.fillSprite(0);
+  for (int i = 0; i < EQ_BARS; i++) {
+    int h = (int)(eqLevel[i] * eqMaxH[i]);
+    int nseg = h / 4;
+    for (int k = 0; k < nseg; k++)
+      lifeSpr.fillRect(eqX[i], eqBaseY[i] - 4 * (k + 1) + 1, 8, 3, 1);
+    int ph = (int)(eqPeak[i] * eqMaxH[i]);
+    int py = eqBaseY[i] - ph - 3;
+    int top = eqBaseY[i] - eqMaxH[i];
+    if (py < top) py = top;
+    lifeSpr.fillRect(eqX[i], py, 8, 2, 1);
+  }
+  lifeSpr.pushSprite(0, 0);
+}
+
 void renderDisplay() {
   switch (displayMode) {
     case MODE_MARQUEE:     updateMarquee(); break;
@@ -1265,6 +1348,7 @@ void renderDisplay() {
     case MODE_STARFIELD:   updateStarfield(); break;
     case MODE_OSC:         updateOsc(); break;
     case MODE_PONG:        updatePong(); break;
+    case MODE_EQ:          updateEq(); break;
   }
 }
 
