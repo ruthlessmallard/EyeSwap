@@ -117,11 +117,12 @@ static uint8_t antGrid[LIFE_BYTES];
 static int antX, antY, antDir;   // dir: 0=N 1=E 2=S 3=W
 static unsigned long lastAntUpdate = 0;
 
-// ==== Fire (MODE_FIRE): classic heat-field flame, half-res, dithered ====
+// ==== Fire (MODE_FIRE): doom-style heat field, half-res, dithered ====
 #define FIRE_W LIFE_W
 #define FIRE_H LIFE_H
 static uint8_t fireHeat[FIRE_W * FIRE_H];   // 120x120 heat, 0..255
 static unsigned long lastFireUpdate = 0;
+static float firePhase = 0.0f;
 
 // ==== Forward Declarations ====
 void setupTFT();
@@ -664,37 +665,50 @@ static const uint8_t BAYER4[4][4] = {
 void fireInit() {
   randomSeed(esp_random());
   memset(fireHeat, 0, sizeof(fireHeat));
-  for (int x = 0; x < FIRE_W; x++) {
-    int v = 150 + random(106);
-    if (random(100) < 12) v = random(20, 80);   // ragged fuel bed
-    fireHeat[(FIRE_H - 1) * FIRE_W + x] = (uint8_t)v;
-  }
+  firePhase = 0.0f;
   lifeSpr.fillSprite(0);
 }
 
 void updateFire() {
   unsigned long now = millis();
-  if (now - lastFireUpdate < 40) return;
+  if (now - lastFireUpdate < 35) return;
   lastFireUpdate = now;
+  firePhase += 0.045f;
 
-  // Re-fuel the bottom row every frame, with occasional cool gaps.
+  // Fuel bed = wandering hot spots (two drifting emitters) plus dim coals
+  // everywhere, so tongues lick up from points instead of a uniform wall.
+  float c1 = FIRE_W * (0.5f + 0.33f * sinf(firePhase * 0.90f));
+  float c2 = FIRE_W * (0.5f + 0.35f * sinf(firePhase * 0.47f + 2.1f));
   for (int x = 0; x < FIRE_W; x++) {
-    int v = 160 + random(96);
-    if (random(100) < 10) v = random(20, 90);
+    float d1 = fabsf(x - c1), d2 = fabsf(x - c2);
+    float bump = 130.0f * expf(-d1 * d1 / 128.0f)   // sigma ~8 cells
+               +  95.0f * expf(-d2 * d2 / 242.0f);  // sigma ~11 cells
+    int v = (int)(55.0f + bump + random(50));
+    if (v > 255) v = 255;
     fireHeat[(FIRE_H - 1) * FIRE_W + x] = (uint8_t)v;
   }
 
-  // Rise: each cell = average of the three below it, minus cooling.
+  // Rise: each cell pulls from ONE random cell below (doom-style), which
+  // keeps high-frequency noise alive -> ragged tongues. Cooling grows with
+  // height so flames die out before the top of the face.
   for (int y = 0; y < FIRE_H - 1; y++) {
     for (int x = 0; x < FIRE_W; x++) {
-      int xl = (x == 0) ? FIRE_W - 1 : x - 1;
-      int xr = (x == FIRE_W - 1) ? 0 : x + 1;
-      int below = (y + 1) * FIRE_W;
-      int v = (fireHeat[below + xl] + fireHeat[below + x] + fireHeat[below + xr]) / 3;
-      v -= 1 + random(3);
+      int sx = x + (int)random(3) - 1;             // jagged column drift
+      if (sx < 0) sx = FIRE_W - 1; else if (sx >= FIRE_W) sx = 0;
+      int v = fireHeat[(y + 1) * FIRE_W + sx];
+      v -= 2 + random(5) + (y >> 5);               // 2..6, hotter up high
       if (v < 0) v = 0;
       fireHeat[y * FIRE_W + x] = (uint8_t)v;
     }
+  }
+
+  // Sparks: a few fresh 255 embers near the hot spots each frame.
+  for (int s = 0; s < 4; s++) {
+    float c = (s & 1) ? c1 : c2;
+    int x = (int)c + (int)random(13) - 6;
+    if (x < 0) x = 0; else if (x >= FIRE_W) x = FIRE_W - 1;
+    int y = FIRE_H - 1 - random(6);
+    fireHeat[y * FIRE_W + x] = 255;
   }
 
   // Dither into the shared 1bpp sprite at 2x2 blocks.
