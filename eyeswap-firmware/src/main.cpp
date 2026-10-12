@@ -61,7 +61,7 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES };
+enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR };
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -135,6 +135,16 @@ static unsigned long pipesRespawnAt = 0;
 static float pipeCosY, pipeSinY, pipeCosP, pipeSinP;
 #define PIPE_SCALE 19.0f
 
+// ==== Radar (MODE_RADAR): phosphor scope sweep with fading blips ====
+#define RADAR_W LIFE_W
+#define RADAR_H LIFE_H
+static uint8_t radarBuf[RADAR_W * RADAR_H];    // 120x120 intensity, 0..255
+static float radarAngle = 0.0f;
+static unsigned long lastRadarUpdate = 0;
+#define RADAR_BLIPS 10
+struct RadarBlip { float ang, rad; uint8_t lit; bool used; };
+static RadarBlip radarBlips[RADAR_BLIPS];
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -152,6 +162,8 @@ void fireInit();
 void updateFire();
 void pipesInit();
 void updatePipes();
+void radarInit();
+void updateRadar();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
@@ -186,6 +198,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "ant") == 0)         { pendingMode = MODE_ANT;         modeDirty = true; }
       else if (strcmp(anim, "fire") == 0)        { pendingMode = MODE_FIRE;        modeDirty = true; }
       else if (strcmp(anim, "pipes") == 0)       { pendingMode = MODE_PIPES;       modeDirty = true; }
+      else if (strcmp(anim, "radar") == 0)       { pendingMode = MODE_RADAR;       modeDirty = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -249,7 +262,7 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
-    if (savedMode > MODE_PIPES) savedMode = MODE_MARQUEE;
+    if (savedMode > MODE_RADAR) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
@@ -463,6 +476,8 @@ void setDisplayMode(DisplayMode mode) {
     fireInit();
   } else if (mode == MODE_PIPES) {
     pipesInit();
+  } else if (mode == MODE_RADAR) {
+    radarInit();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -853,6 +868,114 @@ void updatePipes() {
   if (pipesAlive == 0) pipesRespawnAt = millis() + 1600;
 }
 
+// ==== Radar (MODE_RADAR) ====
+static inline void radarPlot(int x, int y, uint8_t v) {
+  if ((unsigned)x >= RADAR_W || (unsigned)y >= RADAR_H) return;
+  uint8_t* p = &radarBuf[y * RADAR_W + x];
+  if (v > *p) *p = v;
+}
+
+static void radarLine(int x0, int y0, int x1, int y1, uint8_t v) {
+  int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+  int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+  int err = dx + dy;
+  for (;;) {
+    radarPlot(x0, y0, v);
+    if (x0 == x1 && y0 == y1) break;
+    int e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+
+static void radarRing(float r, uint8_t v) {
+  for (int a = 0; a < 360; a += 3) {
+    float t = a * 0.0174533f;
+    radarPlot((int)lroundf(60.0f + r * cosf(t)),
+              (int)lroundf(60.0f + r * sinf(t)), v);
+  }
+}
+
+static void radarSpawnBlip() {
+  for (int i = 0; i < RADAR_BLIPS; i++) {
+    if (!radarBlips[i].used) {
+      radarBlips[i].used = true;
+      radarBlips[i].ang = random(628) / 100.0f;
+      radarBlips[i].rad = 12 + random(46);
+      radarBlips[i].lit = 0;
+      return;
+    }
+  }
+  int i = random(RADAR_BLIPS);
+  radarBlips[i].ang = random(628) / 100.0f;
+  radarBlips[i].rad = 12 + random(46);
+  radarBlips[i].lit = 0;
+}
+
+void radarInit() {
+  randomSeed(esp_random());
+  memset(radarBuf, 0, sizeof(radarBuf));
+  radarAngle = 0.0f;
+  for (int i = 0; i < RADAR_BLIPS; i++) { radarBlips[i].used = false; radarBlips[i].lit = 0; }
+  for (int i = 0; i < 5; i++) radarSpawnBlip();
+  lifeSpr.fillSprite(0);
+}
+
+void updateRadar() {
+  unsigned long now = millis();
+  if (now - lastRadarUpdate < 30) return;
+  lastRadarUpdate = now;
+
+  // Phosphor decay: everything fades a step each frame.
+  for (int i = 0; i < RADAR_W * RADAR_H; i++) {
+    uint8_t v = radarBuf[i];
+    radarBuf[i] = (v > 9) ? (uint8_t)(v - 9) : 0;
+  }
+
+  // Static chrome: range rings + crosshair (redrawn each frame -> steady dim).
+  radarRing(20.0f, 78); radarRing(40.0f, 78); radarRing(58.0f, 78);
+  radarLine(60, 4, 60, 116, 55);
+  radarLine(4, 60, 116, 60, 55);
+
+  // Sweep: bright leading edge + a half-step ghost behind it.
+  radarAngle += 0.06f;
+  if (radarAngle > 6.28318f) radarAngle -= 6.28318f;
+  radarLine(60, 60, 60 + (int)lroundf(58.0f * cosf(radarAngle)),
+                     60 + (int)lroundf(58.0f * sinf(radarAngle)), 255);
+  radarLine(60, 60, 60 + (int)lroundf(58.0f * cosf(radarAngle - 0.06f)),
+                     60 + (int)lroundf(58.0f * sinf(radarAngle - 0.06f)), 170);
+
+  // Blips: light when the sweep passes over, then fade until next rotation.
+  for (int i = 0; i < RADAR_BLIPS; i++) {
+    RadarBlip &b = radarBlips[i];
+    if (!b.used) continue;
+    float d = radarAngle - b.ang;
+    while (d < 0) d += 6.28318f;
+    while (d >= 6.28318f) d -= 6.28318f;
+    if (d < 0.12f) b.lit = 255;
+    if (b.lit) b.lit = (b.lit > 7) ? (uint8_t)(b.lit - 7) : 0;
+    if (b.lit > 40) {
+      int bx = 60 + (int)lroundf(b.rad * cosf(b.ang));
+      int by = 60 + (int)lroundf(b.rad * sinf(b.ang));
+      radarPlot(bx, by, b.lit);
+      radarPlot(bx + 1, by, b.lit); radarPlot(bx - 1, by, b.lit);
+      radarPlot(bx, by + 1, b.lit); radarPlot(bx, by - 1, b.lit);
+    }
+  }
+  if (random(100) < 1) radarSpawnBlip();   // occasional new contact
+
+  // Dither the intensity field into the shared 1bpp sprite at 2x2 blocks.
+  lifeSpr.fillSprite(0);
+  for (int y = 0; y < RADAR_H; y++) {
+    for (int x = 0; x < RADAR_W; x++) {
+      uint8_t v = radarBuf[y * RADAR_W + x];
+      uint8_t t = (uint8_t)(BAYER4[y & 3][x & 3] * 16 + 8);
+      if (v > t) lifeSpr.fillRect(x * LIFE_CELL, y * LIFE_CELL, LIFE_CELL, LIFE_CELL, 1);
+    }
+  }
+  lifeSpr.pushSprite(0, 0);
+}
+
 void renderDisplay() {
   switch (displayMode) {
     case MODE_MARQUEE:     updateMarquee(); break;
@@ -862,6 +985,7 @@ void renderDisplay() {
     case MODE_ANT:         updateAnt(); break;
     case MODE_FIRE:        updateFire(); break;
     case MODE_PIPES:       updatePipes(); break;
+    case MODE_RADAR:       updateRadar(); break;
   }
 }
 
