@@ -61,7 +61,7 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING };
+enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT };
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -106,6 +106,17 @@ volatile bool npDirty = false;
 // Display settings persist across power cycles (NVS).
 Preferences prefs;
 
+// ==== Boids (MODE_BOIDS): flocking agents on the round face ====
+#define BOID_COUNT 24
+struct Boid { float x, y, px, py, vx, vy; };
+static Boid boids[BOID_COUNT];
+static unsigned long lastBoidUpdate = 0;
+
+// ==== Langton's ant (MODE_ANT): highway-builder on the torus ====
+static uint8_t antGrid[LIFE_BYTES];
+static int antX, antY, antDir;   // dir: 0=N 1=E 2=S 3=W
+static unsigned long lastAntUpdate = 0;
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -115,6 +126,10 @@ void updateMarquee();
 void lifeSeed();
 void lifeRepaint();
 void updateLife();
+void boidInit();
+void updateBoids();
+void antInit();
+void updateAnt();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
@@ -145,6 +160,8 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       if (strcmp(anim, "marquee") == 0)          { pendingMode = MODE_MARQUEE;     modeDirty = true; }
       else if (strcmp(anim, "static") == 0)      { pendingMode = MODE_STATIC;      modeDirty = true; }
       else if (strcmp(anim, "now_playing") == 0) { pendingMode = MODE_NOW_PLAYING; modeDirty = true; }
+      else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
+      else if (strcmp(anim, "ant") == 0)         { pendingMode = MODE_ANT;         modeDirty = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -208,7 +225,7 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
-    if (savedMode > MODE_NOW_PLAYING) savedMode = MODE_MARQUEE;
+    if (savedMode > MODE_ANT) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
@@ -414,6 +431,10 @@ void setDisplayMode(DisplayMode mode) {
     tft.setTextColor(drawColor);
   } else if (mode == MODE_STATIC) {
     lifeSeed();
+  } else if (mode == MODE_BOIDS) {
+    boidInit();
+  } else if (mode == MODE_ANT) {
+    antInit();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -496,11 +517,127 @@ void lifeRepaint() {
   lifeSpr.pushSprite(0, 0);
 }
 
+// ==== Boids (MODE_BOIDS) ====
+void boidInit() {
+  for (int i = 0; i < BOID_COUNT; i++) {
+    Boid* b = &boids[i];
+    b->x = 120.0f + (random(81) - 40);
+    b->y = 120.0f + (random(81) - 40);
+    b->px = b->x;
+    b->py = b->y;
+    float a = random(0, 628) / 100.0f;
+    float s = 1.2f + random(100) / 100.0f;
+    b->vx = cosf(a) * s;
+    b->vy = sinf(a) * s;
+  }
+}
+
+void updateBoids() {
+  unsigned long now = millis();
+  if (now - lastBoidUpdate < 50) return;
+  lastBoidUpdate = now;
+
+  const float cx = 120.0f, cy = 120.0f, maxR = 105.0f;
+  for (int i = 0; i < BOID_COUNT; i++) {
+    Boid* b = &boids[i];
+    float ax = 0, ay = 0, cxs = 0, cys = 0, vxs = 0, vys = 0;
+    int neighbors = 0;
+    for (int j = 0; j < BOID_COUNT; j++) {
+      if (j == i) continue;
+      Boid* o = &boids[j];
+      float dx = o->x - b->x, dy = o->y - b->y;
+      float d2 = dx * dx + dy * dy;
+      if (d2 > 48.0f * 48.0f) continue;
+      neighbors++;
+      cxs += o->x; cys += o->y;      // cohesion
+      vxs += o->vx; vys += o->vy;    // alignment
+      if (d2 < 14.0f * 14.0f) { ax -= dx; ay -= dy; }  // separation
+    }
+    if (neighbors > 0) {
+      ax += (cxs / neighbors - b->x) * 0.006f;
+      ay += (cys / neighbors - b->y) * 0.006f;
+      ax += (vxs / neighbors - b->vx) * 0.05f;
+      ay += (vys / neighbors - b->vy) * 0.05f;
+    }
+    // Steer back inside the round face.
+    float dx = b->x - cx, dy = b->y - cy;
+    float r = sqrtf(dx * dx + dy * dy);
+    if (r > maxR) { ax -= (dx / r) * 0.15f; ay -= (dy / r) * 0.15f; }
+
+    b->vx += ax; b->vy += ay;
+    float sp = sqrtf(b->vx * b->vx + b->vy * b->vy);
+    if (sp > 2.2f) {
+      b->vx = b->vx / sp * 2.2f; b->vy = b->vy / sp * 2.2f;
+    } else if (sp < 1.0f && sp > 0.001f) {
+      b->vx = b->vx / sp; b->vy = b->vy / sp;
+    }
+
+    b->px = b->x; b->py = b->y;
+    b->x += b->vx; b->y += b->vy;
+    if (b->x < 0) b->x = 0; if (b->x > 239) b->x = 239;
+    if (b->y < 0) b->y = 0; if (b->y > 239) b->y = 239;
+  }
+
+  lifeSpr.fillSprite(0);
+  for (int i = 0; i < BOID_COUNT; i++) {
+    Boid* b = &boids[i];
+    int x = (int)b->x, y = (int)b->y;
+    int tx = (int)(b->x - b->vx * 5), ty = (int)(b->y - b->vy * 5);
+    lifeSpr.drawLine(tx, ty, x, y, 1);   // heading streak
+    lifeSpr.fillRect(x - 1, y - 1, 3, 3, 1);
+  }
+  lifeSpr.pushSprite(0, 0);
+}
+
+// ==== Langton's ant (MODE_ANT) ====
+static inline bool antGet(int x, int y) {
+  uint32_t idx = (uint32_t)y * LIFE_W + x;
+  return (antGrid[idx >> 3] >> (idx & 7)) & 1;
+}
+
+static inline void antFlip(int x, int y) {
+  uint32_t idx = (uint32_t)y * LIFE_W + x;
+  antGrid[idx >> 3] ^= (uint8_t)(1u << (idx & 7));
+}
+
+void antInit() {
+  memset(antGrid, 0, sizeof(antGrid));
+  lifeSpr.fillSprite(0);
+  antX = LIFE_W / 2;
+  antY = LIFE_H / 2;
+  antDir = 0;
+}
+
+void updateAnt() {
+  unsigned long now = millis();
+  if (now - lastAntUpdate < 50) return;
+  lastAntUpdate = now;
+
+  for (int i = 0; i < 5; i++) {            // 5 steps/tick ~= 100 steps/s
+    bool on = antGet(antX, antY);
+    antDir = (antDir + (on ? 1 : 3)) & 3;  // right on filled, left on empty
+    antFlip(antX, antY);
+    lifeSpr.fillRect(antX * LIFE_CELL, antY * LIFE_CELL, LIFE_CELL, LIFE_CELL,
+                     on ? 0 : 1);
+    switch (antDir) {
+      case 0: antY = (antY == 0) ? LIFE_H - 1 : antY - 1; break;
+      case 1: antX = (antX == LIFE_W - 1) ? 0 : antX + 1; break;
+      case 2: antY = (antY == LIFE_H - 1) ? 0 : antY + 1; break;
+      default: antX = (antX == 0) ? LIFE_W - 1 : antX - 1; break;
+    }
+  }
+  // Show the ant itself at the head of its trail (self-corrects next flip).
+  lifeSpr.fillRect(antX * LIFE_CELL, antY * LIFE_CELL, LIFE_CELL, LIFE_CELL, 1);
+  lifeSpr.pushSprite(0, 0);
+}
+
 void renderDisplay() {
   switch (displayMode) {
     case MODE_MARQUEE:     updateMarquee(); break;
     case MODE_STATIC:      updateLife(); break;
     case MODE_NOW_PLAYING: updateNowPlaying(); break;
+    case MODE_BOIDS:       updateBoids(); break;
+    case MODE_ANT:         updateAnt(); break;
   }
 }
 
