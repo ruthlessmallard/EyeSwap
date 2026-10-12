@@ -696,7 +696,7 @@ void updateFire() {
       int sx = x + (int)random(3) - 1;             // jagged column drift
       if (sx < 0) sx = FIRE_W - 1; else if (sx >= FIRE_W) sx = 0;
       int v = fireHeat[(y + 1) * FIRE_W + sx];
-      v -= 2 + random(5) + (y >> 5);               // 2..6, hotter up high
+      v -= 1 + random(3) + (y >> 6);               // 1..3, taller flame
       if (v < 0) v = 0;
       fireHeat[y * FIRE_W + x] = (uint8_t)v;
     }
