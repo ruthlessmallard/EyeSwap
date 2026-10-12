@@ -61,7 +61,7 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR };
+enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR, MODE_STARFIELD };
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -145,6 +145,12 @@ static unsigned long lastRadarUpdate = 0;
 struct RadarBlip { float ang, rad; uint8_t lit; bool used; };
 static RadarBlip radarBlips[RADAR_BLIPS];
 
+// ==== Starfield (MODE_STARFIELD): 3D fly-through, perspective streaks ====
+#define STAR_COUNT 70
+struct Star { float x, y, z, sp; int px, py; bool hadPos; };
+static Star stars[STAR_COUNT];
+static unsigned long lastStarUpdate = 0;
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -164,6 +170,8 @@ void pipesInit();
 void updatePipes();
 void radarInit();
 void updateRadar();
+void starInit();
+void updateStarfield();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
@@ -199,6 +207,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "fire") == 0)        { pendingMode = MODE_FIRE;        modeDirty = true; }
       else if (strcmp(anim, "pipes") == 0)       { pendingMode = MODE_PIPES;       modeDirty = true; }
       else if (strcmp(anim, "radar") == 0)       { pendingMode = MODE_RADAR;       modeDirty = true; }
+      else if (strcmp(anim, "starfield") == 0)   { pendingMode = MODE_STARFIELD;   modeDirty = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -262,7 +271,7 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
-    if (savedMode > MODE_RADAR) savedMode = MODE_MARQUEE;
+    if (savedMode > MODE_STARFIELD) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
@@ -478,6 +487,8 @@ void setDisplayMode(DisplayMode mode) {
     pipesInit();
   } else if (mode == MODE_RADAR) {
     radarInit();
+  } else if (mode == MODE_STARFIELD) {
+    starInit();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -976,6 +987,52 @@ void updateRadar() {
   lifeSpr.pushSprite(0, 0);
 }
 
+// ==== Starfield (MODE_STARFIELD) ====
+void starInit() {
+  randomSeed(esp_random());
+  for (int i = 0; i < STAR_COUNT; i++) {
+    Star* s = &stars[i];
+    s->x = (random(2001) - 1000) / 1000.0f;
+    s->y = (random(2001) - 1000) / 1000.0f;
+    s->z = 0.05f + random(96) / 100.0f;          // 0.05..1.0
+    s->sp = 0.010f + random(21) / 1000.0f;       // 0.010..0.030
+    s->px = s->py = 0;
+    s->hadPos = false;
+  }
+  lastStarUpdate = 0;
+  lifeSpr.fillSprite(0);
+}
+
+void updateStarfield() {
+  unsigned long now = millis();
+  if (now - lastStarUpdate < 30) return;
+  lastStarUpdate = now;
+
+  lifeSpr.fillSprite(0);
+  for (int i = 0; i < STAR_COUNT; i++) {
+    Star* s = &stars[i];
+    s->z -= s->sp;
+    if (s->z <= 0.03f) {                         // flew past: respawn far
+      s->x = (random(2001) - 1000) / 1000.0f;
+      s->y = (random(2001) - 1000) / 1000.0f;
+      s->z = 1.0f;
+      s->hadPos = false;
+    }
+    float inv = 1.0f / s->z;
+    int sx = 120 + (int)lroundf(s->x * inv * 42.0f);
+    int sy = 120 + (int)lroundf(s->y * inv * 42.0f);
+    int ddx = sx - 120, ddy = sy - 120;
+    if (ddx * ddx + ddy * ddy > 118 * 118) {     // outside the round face
+      s->hadPos = false;
+      continue;
+    }
+    if (s->hadPos) lifeSpr.drawLine(s->px, s->py, sx, sy, 1);   // streak
+    else           lifeSpr.drawPixel(sx, sy, 1);                // far: dot
+    s->px = sx; s->py = sy; s->hadPos = true;
+  }
+  lifeSpr.pushSprite(0, 0);
+}
+
 void renderDisplay() {
   switch (displayMode) {
     case MODE_MARQUEE:     updateMarquee(); break;
@@ -986,6 +1043,7 @@ void renderDisplay() {
     case MODE_FIRE:        updateFire(); break;
     case MODE_PIPES:       updatePipes(); break;
     case MODE_RADAR:       updateRadar(); break;
+    case MODE_STARFIELD:   updateStarfield(); break;
   }
 }
 
