@@ -30,9 +30,16 @@ EyeSwap is designed for **stationary fleet vehicles** in **controlled environmen
 
 ---
 
-## V0.05 Prototype
+## Android App (v1.0.0)
 
-Flutter-based Android app for testing the EyeSwap control schema before hardware build.
+Flutter-based Android controller — live BLE link to the EyeSwap hardware, with the on-screen 3-button UI for bench testing.
+
+### Shipped in v1.0.0
+- BLE connection to EyeSwap hardware (flutter_blue_plus, 512-byte MTU)
+- Startup prompt + "!" indicator for missing Notification Access / Accessibility / runtime permissions
+- Settings screen wired end-to-end: brightness offset, display color, idle animation mode
+- Now Playing: polls Android media sessions every 4 s, pushes title/artist/state/source only on change
+- Fixed: manifest now declares the real notification listener (media sessions were never reachable before)
 
 ### Features
 - 3-button digital representation of physical EyeSwap
@@ -57,23 +64,21 @@ Flutter-based Android app for testing the EyeSwap control schema before hardware
 
 Designed for older fleet vehicles without Android Auto support. Physical button interface reduces touchscreen dependency during operation.
 
-### ESP32 Firmware (WIP)
+### ESP32 Firmware (v1.0.0)
 
-Located in `eyeswap-firmware/` directory. Arduino-based ESP32-S3 firmware for GC9A01 round display and BLE communication.
+Located in `eyeswap-firmware/` directory. PlatformIO / Arduino ESP32-S3 firmware for GC9A01 round display and BLE communication.
 
 **Implemented:**
-- BLE GATT service for app communication
+- BLE GATT service for app communication (config characteristic takes JSON commands, button characteristic notifies taps)
 - Button press detection (tap/long-press)
-- Display brightness and color config
-- JSON command protocol
+- Display brightness and color config (brightness approximated by text-color scaling — no backlight pin)
+- **Idle Animations**: amber marquee ticker, Conway's Game of Life, now-playing card
+  - Game of Life: 120x120 torus field, 2x2 px cells, reseeds when the soup dies or freezes (`LIFE_CELL` is the zoom knob)
+  - Now Playing: PLAYING/PAUSED + title (auto-shrink, then scroll when too wide) + artist, pushed only on change
+- One-writer rendering rule: BLE callbacks only record state; the loop task does all TFT/SPI work (two tasks racing one SPI bus corrupts the transaction mutex and panics)
 
 **TODO / Stubs:**
-- **Idle Animations**: Marquee text scroll, static noise, now playing modes
-  - App sends: `{"type":"mode","animation":"marquee|static|now_playing"}`
-  - ESP32 renders selected animation when no media active
-  - `now_playing` shows track metadata received from app
 - **Dual long-press**: Buttons 1+3 held together kills display (privacy mode)
-- **Now Playing**: Receive metadata from app, display on round screen
 - **Time sync**: App sends current time on connect for clock display
 - **Boot screen**: Show welcome ASCII art when powered on / disconnected
 
@@ -84,6 +89,9 @@ Located in `eyeswap-firmware/` directory. Arduino-based ESP32-S3 firmware for GC
 
 // App → ESP32 animation mode
 {"type":"mode","animation":"marquee"}
+
+// App → ESP32 now-playing metadata (pushed only on change)
+{"type":"now_playing","title":"Song","artist":"Artist","state":"playing","source":"com.google.android.apps.youtube.music"}
 
 // ESP32 → App button event
 {"type":"button","button":1,"action":"tap"}
