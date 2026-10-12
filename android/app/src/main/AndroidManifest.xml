@@ -55,7 +55,7 @@
 
         <!-- NotificationListenerService required for MediaSessionManager.getActiveSessions() -->
         <service
-            android:name=".SwitchBoxNotificationListener"
+            android:name=".EyeSwapNotificationListener"
             android:exported="true"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
