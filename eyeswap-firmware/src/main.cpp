@@ -61,7 +61,7 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR, MODE_STARFIELD, MODE_OSC };
+enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_PONG };
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -159,6 +159,18 @@ static int oscPX = 0, oscPY = 0;
 static bool oscHad = false;
 static unsigned long lastOscUpdate = 0;
 
+// ==== Pong (MODE_PONG): autonomous rally, blocky digits ====
+#define PONG_TOP 54
+#define PONG_BOT 186
+#define PONG_PAD_H 30
+#define PONG_PAD_X_L 25
+#define PONG_PAD_X_R 215
+struct PongPaddle { float y, err; };
+static PongPaddle pongL, pongR;
+static float pongBallX, pongBallY, pongBallVX, pongBallVY;
+static int pongScoreL = 0, pongScoreR = 0, pongServeDelay = 0, pongFrame = 0;
+static unsigned long lastPongUpdate = 0;
+
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -182,6 +194,8 @@ void starInit();
 void updateStarfield();
 void oscInit();
 void updateOsc();
+void pongInit();
+void updatePong();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode);
 void applyDisplayColor();
@@ -219,6 +233,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "radar") == 0)       { pendingMode = MODE_RADAR;       modeDirty = true; }
       else if (strcmp(anim, "starfield") == 0)   { pendingMode = MODE_STARFIELD;   modeDirty = true; }
       else if (strcmp(anim, "oscilloscope") == 0 || strcmp(anim, "osc") == 0) { pendingMode = MODE_OSC; modeDirty = true; }
+      else if (strcmp(anim, "pong") == 0)        { pendingMode = MODE_PONG;        modeDirty = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -282,7 +297,7 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
-    if (savedMode > MODE_OSC) savedMode = MODE_MARQUEE;
+    if (savedMode > MODE_PONG) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
@@ -502,6 +517,8 @@ void setDisplayMode(DisplayMode mode) {
     starInit();
   } else if (mode == MODE_OSC) {
     oscInit();
+  } else if (mode == MODE_PONG) {
+    pongInit();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -1109,6 +1126,132 @@ void updateOsc() {
   lifeSpr.pushSprite(0, 0);
 }
 
+// ==== Pong (MODE_PONG) ====
+// Blocky 3x5 digit font, MSB-left per row — authentic pong scoreboard.
+static const uint8_t PONG_DIGITS[10][5] = {
+  {0b111,0b101,0b101,0b101,0b111},  // 0
+  {0b010,0b110,0b010,0b010,0b111},  // 1
+  {0b111,0b001,0b111,0b100,0b111},  // 2
+  {0b111,0b001,0b111,0b001,0b111},  // 3
+  {0b101,0b101,0b111,0b001,0b001},  // 4
+  {0b111,0b100,0b111,0b001,0b111},  // 5
+  {0b111,0b100,0b111,0b101,0b111},  // 6
+  {0b111,0b001,0b010,0b010,0b010},  // 7
+  {0b111,0b101,0b111,0b101,0b111},  // 8
+  {0b111,0b101,0b111,0b001,0b111}   // 9
+};
+
+static void pongDigit(int d, int x, int y) {
+  for (int r = 0; r < 5; r++)
+    for (int c = 0; c < 3; c++)
+      if (PONG_DIGITS[d][r] & (0b100 >> c))
+        lifeSpr.fillRect(x + c * 3, y + r * 3, 3, 3, 1);
+}
+
+static void pongScoreDraw(int score, int x) {
+  if (score >= 10) {
+    pongDigit(score / 10, x - 6, 36);
+    pongDigit(score % 10, x + 6, 36);
+  } else {
+    pongDigit(score, x, 36);
+  }
+}
+
+static void pongServe(int dir) {
+  pongBallX = 120; pongBallY = 120;
+  pongBallVX = 2.3f * dir;
+  pongBallVY = (random(200) - 100) / 50.0f;      // -2..2
+  pongServeDelay = 45;                            // freeze ~1.4 s at serve
+}
+
+void pongInit() {
+  randomSeed(esp_random());
+  pongScoreL = pongScoreR = 0;
+  pongFrame = 0;
+  pongL.y = pongR.y = 120;
+  pongServe(random(2) ? 1 : -1);
+  lifeSpr.fillSprite(0);
+}
+
+static void pongStepPaddle(PongPaddle* pad, bool toward) {
+  if (pongFrame % 45 == 0) pad->err = (random(200) - 100) / 4.0f;   // -25..25
+  float ty = toward ? (pongBallY + pad->err) : 120.0f;
+  float dy = ty - pad->y;
+  if (dy > 2.8f) dy = 2.8f; else if (dy < -2.8f) dy = -2.8f;
+  pad->y += dy;
+  float lo = PONG_TOP + PONG_PAD_H / 2, hi = PONG_BOT - PONG_PAD_H / 2;
+  if (pad->y < lo) pad->y = lo;
+  if (pad->y > hi) pad->y = hi;
+}
+
+void updatePong() {
+  unsigned long now = millis();
+  if (now - lastPongUpdate < 30) return;
+  lastPongUpdate = now;
+  pongFrame++;
+
+  // Paddle AI: track when the ball is coming, drift to center otherwise.
+  pongStepPaddle(&pongL, pongBallVX < 0);
+  pongStepPaddle(&pongR, pongBallVX > 0);
+
+  if (pongServeDelay > 0) {
+    pongServeDelay--;
+  } else {
+    pongBallX += pongBallVX;
+    pongBallY += pongBallVY;
+
+    // Walls
+    if (pongBallY < PONG_TOP + 2) { pongBallY = PONG_TOP + 2; pongBallVY = fabsf(pongBallVY); }
+    if (pongBallY > PONG_BOT - 2) { pongBallY = PONG_BOT - 2; pongBallVY = -fabsf(pongBallVY); }
+
+    // Paddle collisions (ball is a 4px square, +/-2 around center)
+    if (pongBallVX < 0 && pongBallX <= PONG_PAD_X_L + 4 &&
+        pongBallX >= PONG_PAD_X_L - 8) {
+      if (fabsf(pongBallY - pongL.y) <= PONG_PAD_H / 2 + 2) {
+        pongBallX = PONG_PAD_X_L + 4;
+        pongBallVX = -pongBallVX;
+        pongBallVY += (pongBallY - pongL.y) * 0.09f;      // angle from hit spot
+        pongBallVX *= 1.04f;                              // rally speeds up
+      }
+    }
+    if (pongBallVX > 0 && pongBallX >= PONG_PAD_X_R - 4 &&
+        pongBallX <= PONG_PAD_X_R + 8) {
+      if (fabsf(pongBallY - pongR.y) <= PONG_PAD_H / 2 + 2) {
+        pongBallX = PONG_PAD_X_R - 4;
+        pongBallVX = -pongBallVX;
+        pongBallVY += (pongBallY - pongR.y) * 0.09f;
+        pongBallVX *= 1.04f;
+      }
+    }
+    float sp = pongBallVY;
+    if (sp > 5.0f) pongBallVY = 5.0f; else if (sp < -5.0f) pongBallVY = -5.0f;
+    if (pongBallVX > 4.5f) pongBallVX = 4.5f;
+    if (pongBallVX < -4.5f) pongBallVX = -4.5f;
+
+    // Score when the ball escapes a side, then serve toward the loser.
+    if (pongBallX < -4) {
+      pongScoreR++;
+      if (pongScoreR >= 11) { pongScoreL = 0; pongScoreR = 0; }
+      pongServe(-1);
+    } else if (pongBallX > 244) {
+      pongScoreL++;
+      if (pongScoreL >= 11) { pongScoreL = 0; pongScoreR = 0; }
+      pongServe(1);
+    }
+  }
+
+  // Draw
+  lifeSpr.fillSprite(0);
+  for (int y = PONG_TOP; y < PONG_BOT; y += 10)          // dashed center line
+    lifeSpr.fillRect(119, y, 2, 5, 1);
+  lifeSpr.fillRect(PONG_PAD_X_L, (int)pongL.y - PONG_PAD_H / 2, 4, PONG_PAD_H, 1);
+  lifeSpr.fillRect(PONG_PAD_X_R, (int)pongR.y - PONG_PAD_H / 2, 4, PONG_PAD_H, 1);
+  lifeSpr.fillRect((int)pongBallX - 2, (int)pongBallY - 2, 4, 4, 1);
+  pongScoreDraw(pongScoreL, 86);
+  pongScoreDraw(pongScoreR, 154);
+  lifeSpr.pushSprite(0, 0);
+}
+
 void renderDisplay() {
   switch (displayMode) {
     case MODE_MARQUEE:     updateMarquee(); break;
@@ -1121,6 +1264,7 @@ void renderDisplay() {
     case MODE_RADAR:       updateRadar(); break;
     case MODE_STARFIELD:   updateStarfield(); break;
     case MODE_OSC:         updateOsc(); break;
+    case MODE_PONG:        updatePong(); break;
   }
 }
 
