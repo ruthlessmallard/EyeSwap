@@ -207,13 +207,13 @@ class ESP32BLEService {
     return sendConfig(brightnessOffset: brightnessOffset, color: color);
   }
 
-  /// Send idle animation mode to ESP32
-  /// [mode] 'marquee', 'static', or 'now_playing'
+  /// Send idle animation mode to ESP32.
+  /// The firmware is the authority on which animation names are valid (it
+  /// logs unknown ones), so don't gate the list here — a stale client
+  /// whitelist silently dropped every new mode
+  /// (boids/ant/fire/pipes/radar/starfield/oscilloscope/pong/eq/cycle).
   Future<bool> sendIdleAnimation(String mode) async {
     if (!_isConnected || _configChar == null) return false;
-
-    final validModes = ['marquee', 'static', 'now_playing'];
-    if (!validModes.contains(mode)) return false;
 
     final packet = jsonEncode({
       'type': 'mode',
