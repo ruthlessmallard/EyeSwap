@@ -198,3 +198,23 @@ flutter pub get
 dart run flutter_launcher_icons:generate
 flutter build apk --release
 ```
+
+---
+
+## License
+
+EyeSwap's own code is licensed under **Creative Commons
+Attribution-NonCommercial-NoDerivatives 4.0 International (CC BY-NC-ND 4.0)** —
+see [`LICENSE`](LICENSE).
+
+You may **view, run, and share this work verbatim** for non-commercial purposes,
+with credit. You may **not** modify it, rebrand it, or use it commercially.
+
+Full terms: https://creativecommons.org/licenses/by-nc-nd/4.0/
+
+Bundled third-party components (Flutter packages, TFT_eSPI, ArduinoJson,
+NimBLE-Arduino) keep their own licenses — see
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+EyeSwap is a **personal project, shared as-is** — see the safety disclaimer at
+the top. It is not certified or validated for road, vehicle, or safety use.
