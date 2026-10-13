@@ -323,6 +323,14 @@ void setup() {
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_MARQUEE);
     if (savedMode > MODE_EQ) savedMode = MODE_MARQUEE;
     displayMode = savedMode;
+    if (prefs.getBool("cycle", false)) {      // restore Random Cycle across reboots
+      cycleEnabled = true;
+      cycleIndex = 0;
+      for (int i = 0; i < CYCLE_N; i++)
+        if (CYCLE_MODES[i] == savedMode) { cycleIndex = i; break; }
+      cycleNextAt = millis() + CYCLE_MS;
+      Serial.println("[NVS] restored Random Cycle");
+    }
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
     baseG = prefs.getUChar("cg", 0xBF);
@@ -519,6 +527,7 @@ void updateNowPlaying() {
 
 void saveDisplaySettings() {
   prefs.putUChar("mode", (uint8_t)displayMode);
+  prefs.putBool("cycle", cycleEnabled);
   prefs.putInt("bright", brightnessOffset);
   prefs.putUChar("cr", baseR);
   prefs.putUChar("cg", baseG);
