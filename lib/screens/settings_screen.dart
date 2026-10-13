@@ -39,8 +39,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   final List<Map<String, dynamic>> _idleAnimations = [
     {'id': 'marquee', 'name': 'Text Marquee', 'icon': Icons.text_fields},
-    {'id': 'static', 'name': 'Static Noise', 'icon': Icons.grain},
+    {'id': 'static', 'name': 'Game of Life', 'icon': Icons.grain},
     {'id': 'now_playing', 'name': 'Now Playing', 'icon': Icons.music_note},
+    {'id': 'boids', 'name': 'Boids', 'icon': Icons.flight},
+    {'id': 'ant', 'name': "Langton's Ant", 'icon': Icons.grid_on},
+    {'id': 'fire', 'name': 'Fire', 'icon': Icons.local_fire_department},
+    {'id': 'pipes', 'name': 'Pipes', 'icon': Icons.plumbing},
+    {'id': 'radar', 'name': 'Radar Sweep', 'icon': Icons.radar},
+    {'id': 'starfield', 'name': 'Starfield', 'icon': Icons.star},
+    {'id': 'oscilloscope', 'name': 'Oscilloscope', 'icon': Icons.show_chart},
+    {'id': 'pong', 'name': 'Pong', 'icon': Icons.sports_esports},
+    {'id': 'eq', 'name': 'Spectrum (EQ)', 'icon': Icons.graphic_eq},
+    {'id': 'cycle', 'name': 'Random Cycle', 'icon': Icons.shuffle},
   ];
 
   @override

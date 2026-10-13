@@ -8,6 +8,7 @@ import '../services/ble_handler.dart';
 import 'settings_screen.dart';
 import 'battery_help_screen.dart';
 import 'permissions_screen.dart';
+import 'disclaimer_screen.dart';
 
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({super.key});
@@ -33,7 +34,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
     super.initState();
     _initializeBle();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkAndPromptPermissions();
+      _runStartupChecks();
     });
     // Poll media metadata every 4s; only changes are pushed to the hardware.
     _nowPlayingTimer = Timer.periodic(
@@ -80,6 +81,20 @@ class _ControllerScreenState extends State<ControllerScreen> {
     final allGranted = notificationAccess && accessibilityService;
     setState(() => _permissionsOk = allGranted);
     return allGranted;
+  }
+
+  Future<void> _runStartupChecks() async {
+    // Safety disclaimer first (once, ever), then the permissions prompt.
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool('disclaimer_accepted') ?? false)) {
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<bool>(
+          builder: (context) => const DisclaimerScreen(),
+        ),
+      );
+    }
+    await _checkAndPromptPermissions();
   }
 
   Future<void> _checkAndPromptPermissions() async {

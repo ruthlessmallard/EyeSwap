@@ -629,8 +629,14 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 context.contentResolver,
                 "enabled_notification_listeners"
             ) ?: return false
-            val componentName = "${context.packageName}/.EyeSwapNotificationListener"
-            return enabled.contains(componentName)
+            // Settings stores these in EXPANDED form
+            // (pkg/com.pkg.Class), not the short pkg/.Class form, so compare
+            // against the real ComponentName both ways.
+            val cn = ComponentName(context, EyeSwapNotificationListener::class.java)
+            return enabled.split(':').any {
+                it.equals(cn.flattenToString(), true) ||
+                    it.equals(cn.flattenToShortString(), true)
+            }
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to check notification access: ${e.message}")
             return false
@@ -646,8 +652,15 @@ class MediaButtonPlugin(private val context: Context) : MethodChannel.MethodCall
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: return false
-            val serviceName = "${context.packageName}/.EyeSwapAccessibilityService"
-            return enabled.contains(serviceName)
+            // Same expanded-vs-short component form issue as notification
+            // listeners. Match the real ComponentName, and keep a prefix
+            // fallback for any ROM that stores an extra suffix.
+            val cn = ComponentName(context, EyeSwapAccessibilityService::class.java)
+            return enabled.split(':').any {
+                it.equals(cn.flattenToString(), true) ||
+                    it.equals(cn.flattenToShortString(), true) ||
+                    it.startsWith("${context.packageName}/")
+            }
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to check accessibility service: ${e.message}")
             return false
