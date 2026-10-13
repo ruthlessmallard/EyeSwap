@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,14 @@ class BleHandler {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _commandCharacteristic;
   BluetoothCharacteristic? _configCharacteristic;
+
+  // Scan/connection bookkeeping so the link recovers on its own after the
+  // pod reboots (the app used to scan exactly once, then sit on "SCANNING"
+  // forever until a manual force-stop).
+  bool _scanListenerAttached = false;
+  bool _connecting = false;
+  StreamSubscription<List<ScanResult>>? _scanSub;
+  StreamSubscription<BluetoothConnectionState>? _connStateSub;
   
   // Callbacks - wire to button handlers
   VoidCallback? onButton1Press;
@@ -33,22 +42,53 @@ class BleHandler {
 
   Future<void> startScanning() async {
     try {
-      FlutterBluePlus.scanResults.listen((results) {
-        for (ScanResult result in results) {
-          if (result.device.platformName == deviceName) {
-            _connectToDevice(result.device);
-            break;
+      // Attach the result listener once; re-entrant scans must not stack
+      // duplicate listeners or every hit would spawn another connect.
+      if (!_scanListenerAttached) {
+        _scanSub = FlutterBluePlus.scanResults.listen((results) {
+          for (ScanResult result in results) {
+            if (result.device.platformName == deviceName &&
+                _device == null &&
+                !_connecting) {
+              _connectToDevice(result.device);
+              break;
+            }
           }
-        }
-      });
-      
+        });
+        _scanListenerAttached = true;
+      }
+
+      if (FlutterBluePlus.isScanningNow) return;
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
     } catch (e) {
       developer.log('BLE scan failed: $e', name: 'BleHandler');
     }
   }
 
+  /// Rescan a few seconds after a drop, unless we already reconnected.
+  void _scheduleRescan() {
+    Future.delayed(const Duration(seconds: 3), () {
+      if (_device == null && !_connecting) startScanning();
+    });
+  }
+
+  /// Watch the link so a pod reboot triggers an automatic reconnect.
+  void _watchConnectionState(BluetoothDevice device) {
+    _connStateSub?.cancel();
+    _connStateSub = device.connectionState.listen((state) {
+      if (state == BluetoothConnectionState.disconnected) {
+        _device = null;
+        _commandCharacteristic = null;
+        _configCharacteristic = null;
+        onDeviceDisconnected?.call();
+        developer.log('EyeSwap disconnected - auto-rescanning', name: 'BleHandler');
+        _scheduleRescan();
+      }
+    });
+  }
+
   Future<void> _connectToDevice(BluetoothDevice device) async {
+    _connecting = true;
     try {
       await FlutterBluePlus.stopScan();
       await device.connect();
@@ -78,11 +118,17 @@ class BleHandler {
       }
 
       if (_commandCharacteristic != null) {
+        _watchConnectionState(device);
         onDeviceConnected?.call();
         developer.log('Connected to EyeSwap ESP32', name: 'BleHandler');
+      } else {
+        _scheduleRescan();
       }
     } catch (e) {
       developer.log('Connection failed: $e', name: 'BleHandler');
+      _scheduleRescan();
+    } finally {
+      _connecting = false;
     }
   }
 
@@ -201,13 +247,15 @@ class BleHandler {
 
   Future<void> disconnect() async {
     try {
+      await _connStateSub?.cancel();
+      _connStateSub = null;
       await _device?.disconnect();
-      _device = null;
-      _commandCharacteristic = null;
-      _configCharacteristic = null;
-      onDeviceDisconnected?.call();
     } catch (e) {
       developer.log('Disconnect failed: $e', name: 'BleHandler');
     }
+    _device = null;
+    _commandCharacteristic = null;
+    _configCharacteristic = null;
+    onDeviceDisconnected?.call();
   }
 }
