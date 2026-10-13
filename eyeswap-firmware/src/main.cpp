@@ -62,6 +62,14 @@ unsigned long lastMarqueeUpdate = 0;
 
 // ==== Display mode + config (set over BLE) ====
 enum DisplayMode { MODE_MARQUEE, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_PONG, MODE_EQ };
+
+// Random Cycle: rotate the pod through the visual roster on a timer.
+#define CYCLE_MS 600000UL   // 10 minutes per animation
+static const DisplayMode CYCLE_MODES[] = {
+  MODE_STATIC, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_PIPES,
+  MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_PONG, MODE_EQ, MODE_MARQUEE
+};
+#define CYCLE_N ((int)(sizeof(CYCLE_MODES) / sizeof(CYCLE_MODES[0])))
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
@@ -100,6 +108,10 @@ static unsigned long lastLifeUpdate = 0;
 // mutex and panics (assert in xQueueGenericSend / spiEndTransaction).
 volatile DisplayMode pendingMode = MODE_MARQUEE;
 volatile bool modeDirty = false;
+volatile bool cycleStart = false;      // BLE asked for Random Cycle
+static bool cycleEnabled = false;      // loop-owned
+static int cycleIndex = 0;             // current slot in CYCLE_MODES
+static unsigned long cycleNextAt = 0;  // millis() of next hop
 volatile bool configDirty = false;
 volatile bool npDirty = false;
 
@@ -245,6 +257,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "oscilloscope") == 0 || strcmp(anim, "osc") == 0) { pendingMode = MODE_OSC; modeDirty = true; }
       else if (strcmp(anim, "pong") == 0)        { pendingMode = MODE_PONG;        modeDirty = true; }
       else if (strcmp(anim, "eq") == 0)          { pendingMode = MODE_EQ;          modeDirty = true; }
+      else if (strcmp(anim, "cycle") == 0 || strcmp(anim, "random") == 0) { cycleStart = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
     else if (strcmp(type, "config") == 0) {
@@ -326,7 +339,21 @@ void setup() {
 // ==========================================
 void loop() {
   handleButtons();
-  if (modeDirty) { modeDirty = false; setDisplayMode(pendingMode); }
+  if (cycleStart) {                          // Random Cycle: start now
+    cycleStart = false;
+    cycleEnabled = true;
+    cycleIndex = (int)random(CYCLE_N);
+    setDisplayMode(CYCLE_MODES[cycleIndex]);
+    cycleNextAt = millis() + CYCLE_MS;
+  }
+  if (modeDirty) { modeDirty = false; cycleEnabled = false; setDisplayMode(pendingMode); }
+  if (cycleEnabled && millis() >= cycleNextAt) {   // hop to a fresh animation
+    int k = cycleIndex;
+    while (CYCLE_N > 1 && k == cycleIndex) k = (int)random(CYCLE_N);
+    cycleIndex = k;
+    setDisplayMode(CYCLE_MODES[cycleIndex]);
+    cycleNextAt = millis() + CYCLE_MS;
+  }
   if (configDirty) {
     configDirty = false;
     applyDisplayColor();
