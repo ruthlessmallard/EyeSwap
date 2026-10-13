@@ -65,9 +65,11 @@ class _ControllerScreenState extends State<ControllerScreen> {
     final animation = prefs.getString('idle_animation') ?? 'marquee';
     final brightness = prefs.getInt('brightness_offset') ?? 0;
     final colorHex = prefs.getString('bg_color') ?? 'FFAA00';
+    final accentHex = prefs.getString('accent_color') ?? 'FFFFFF';
     await _bleHandler.sendDisplayConfig(
       brightnessOffset: brightness,
       colorHex: colorHex,
+      accentHex: accentHex,
     );
     await _bleHandler.sendMode(animation);
   }

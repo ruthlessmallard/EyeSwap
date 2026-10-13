@@ -18,8 +18,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Brightness offset: -50 to +50, default 0
   double _brightnessOffset = 0;
   
-  // Selected color
+  // Selected colors: primary + secondary accent (single-color = both equal)
   Color _selectedColor = const Color(0xFFFFAA00); // Default amber
+  Color _selectedAccent = const Color(0xFFFFFFFF); // Default white
   
   // Preset colors for common dash colors
   final List<Map<String, dynamic>> _presetColors = [
@@ -67,6 +68,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _brightnessOffset = prefs.getDouble('brightness_offset') ?? 0;
       final hex = prefs.getString('bg_color') ?? 'FFAA00';
       _selectedColor = Color(int.parse('FF$hex', radix: 16));
+      final ahex = prefs.getString('accent_color') ?? 'FFFFFF';
+      _selectedAccent = Color(int.parse('FF$ahex', radix: 16));
     });
   }
   
@@ -121,10 +124,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       '${_selectedColor.green.toRadixString(16).padLeft(2, '0')}'
       '${_selectedColor.blue.toRadixString(16).padLeft(2, '0')}',
     );
+    await prefs.setString(
+      'accent_color',
+      '${_selectedAccent.red.toRadixString(16).padLeft(2, '0')}'
+      '${_selectedAccent.green.toRadixString(16).padLeft(2, '0')}'
+      '${_selectedAccent.blue.toRadixString(16).padLeft(2, '0')}',
+    );
 
     final success = await _bleService.sendConfig(
       brightnessOffset: _brightnessOffset.toInt(),
       color: _selectedColor,
+      accent: _selectedAccent,
     );
     
     setState(() {
@@ -280,6 +290,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
             
             const SizedBox(height: 32),
             
+            // Accent (secondary) color
+            _buildSectionTitle('Accent Color'),
+            const SizedBox(height: 8),
+            const Text(
+              'Second color the animations use (fire core, boid leaders, radar '
+              'sweep, pong paddles...). Pick the same as the primary for a '
+              'single-color look.',
+              style: TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: _presetColors.map((preset) {
+                final isSelected = _selectedAccent == preset['color'];
+                return _buildColorButton(
+                  name: preset['name'] as String,
+                  color: preset['color'] as Color,
+                  isSelected: isSelected,
+                  onTap: () {
+                    setState(() {
+                      _selectedAccent = preset['color'] as Color;
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () {
+                  setState(() => _selectedAccent = _selectedColor);
+                },
+                icon: const Icon(Icons.link, size: 18),
+                label: const Text('Match primary'),
+                style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFFFAA00)),
+              ),
+            ),
+            
+            const SizedBox(height: 32),
+            
             // Preview
             _buildSectionTitle('Preview'),
             const SizedBox(height: 16),
@@ -291,8 +344,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: _selectedColor,
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: Colors.white24,
-                    width: 2,
+                    color: _selectedAccent,
+                    width: 3,
                   ),
                   boxShadow: [
                     BoxShadow(

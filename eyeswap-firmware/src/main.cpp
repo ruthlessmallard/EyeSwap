@@ -72,8 +72,10 @@ static const DisplayMode CYCLE_MODES[] = {
 #define CYCLE_N ((int)(sizeof(CYCLE_MODES) / sizeof(CYCLE_MODES[0])))
 DisplayMode displayMode = MODE_MARQUEE;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
-uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // Amber default
+uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // primary: amber default
+uint8_t accR  = 0xFF, accG  = 0xFF, accB  = 0xFF;  // accent: white default
 uint16_t drawColor = TICKER_COLOR;
+uint16_t accentColor = 0xFFFF;
 
 // Now-playing metadata (pushed from the app, slice 2)
 String npTitle = "";
@@ -272,9 +274,16 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
         baseG = (rgb >> 8) & 0xFF;
         baseB = rgb & 0xFF;
       }
+      const char* hex2 = doc["accent_color"] | "";
+      if (hex2[0] == '#' && strlen(hex2) == 7) {
+        long rgb2 = strtol(hex2 + 1, nullptr, 16);
+        accR = (rgb2 >> 16) & 0xFF;
+        accG = (rgb2 >> 8) & 0xFF;
+        accB = rgb2 & 0xFF;
+      }
       configDirty = true;  // deferred: loop task calls applyDisplayColor()
-      Serial.printf("[BLE] Config applied: brightness %d, color #%02X%02X%02X\n",
-                    brightnessOffset, baseR, baseG, baseB);
+      Serial.printf("[BLE] Config applied: brightness %d, primary #%02X%02X%02X accent #%02X%02X%02X\n",
+                    brightnessOffset, baseR, baseG, baseB, accR, accG, accB);
     }
     else if (strcmp(type, "now_playing") == 0) {
       npTitle = (const char*)(doc["title"] | "");
@@ -335,6 +344,9 @@ void setup() {
     baseR = prefs.getUChar("cr", 0xFF);
     baseG = prefs.getUChar("cg", 0xBF);
     baseB = prefs.getUChar("cb", 0x00);
+    accR  = prefs.getUChar("ar", 0xFF);
+    accG  = prefs.getUChar("ag", 0xFF);
+    accB  = prefs.getUChar("ab", 0xFF);
   }
   applyDisplayColor();
   setDisplayMode(displayMode);
@@ -403,10 +415,14 @@ void setupTFT() {
   Serial.printf("EYESWAP ticker label width: %d px\n",
                 tft.textWidth(marqueeText));
 
-  // Game of Life sprite: 1bpp full-frame push keeps animation flicker-free.
-  lifeSpr.setColorDepth(1);
+  // Shared sprite: 4bpp palette (0=black, 1=primary, 2=accent). Full-frame
+  // push stays flicker-free, and the palette gives every animation a second
+  // color. 240x240 @ 4bpp = ~28 KB.
+  lifeSpr.setColorDepth(4);
   lifeSpr.createSprite(LIFE_W * LIFE_CELL, LIFE_H * LIFE_CELL);
-  lifeSpr.setBitmapColor(drawColor, TFT_BLACK);
+  lifeSpr.setPaletteColor(0, TFT_BLACK);
+  lifeSpr.setPaletteColor(1, drawColor);
+  lifeSpr.setPaletteColor(2, accentColor);
   lifeSpriteReady = true;
   
   // First ticker frame is rendered by updateMarquee().
@@ -452,9 +468,17 @@ void applyDisplayColor() {
   int g = (int)(baseG * scale); if (g > 255) g = 255; if (g < 0) g = 0;
   int b = (int)(baseB * scale); if (b > 255) b = 255; if (b < 0) b = 0;
   drawColor = tft.color565(r, g, b);
+  int ar = (int)(accR * scale); if (ar > 255) ar = 255; if (ar < 0) ar = 0;
+  int ag = (int)(accG * scale); if (ag > 255) ag = 255; if (ag < 0) ag = 0;
+  int ab = (int)(accB * scale); if (ab > 255) ab = 255; if (ab < 0) ab = 0;
+  accentColor = tft.color565(ar, ag, ab);
   tft.setTextColor(drawColor);
-  if (lifeSpriteReady) lifeSpr.setBitmapColor(drawColor, TFT_BLACK);
-  Serial.printf("[TFT] draw color 0x%04X\n", drawColor);
+  if (lifeSpriteReady) {
+    lifeSpr.setPaletteColor(0, TFT_BLACK);
+    lifeSpr.setPaletteColor(1, drawColor);
+    lifeSpr.setPaletteColor(2, accentColor);
+  }
+  Serial.printf("[TFT] draw color 0x%04X accent 0x%04X\n", drawColor, accentColor);
 }
 
 void drawNowPlaying() {
@@ -532,6 +556,9 @@ void saveDisplaySettings() {
   prefs.putUChar("cr", baseR);
   prefs.putUChar("cg", baseG);
   prefs.putUChar("cb", baseB);
+  prefs.putUChar("ar", accR);
+  prefs.putUChar("ag", accG);
+  prefs.putUChar("ab", accB);
 }
 
 void setDisplayMode(DisplayMode mode) {
@@ -726,7 +753,7 @@ void updateBoids() {
     int ly = (int)lroundf(b->y - fy * 1.5f + py * W);
     int rx = (int)lroundf(b->x - fx * 1.5f - px * W);
     int ry = (int)lroundf(b->y - fy * 1.5f - py * W);
-    lifeSpr.fillTriangle(tipx, tipy, lx, ly, rx, ry, 1);
+    lifeSpr.fillTriangle(tipx, tipy, lx, ly, rx, ry, (i % 5 == 0) ? 2 : 1);
   }
   lifeSpr.pushSprite(0, 0);
 }
@@ -769,7 +796,8 @@ void updateAnt() {
     }
   }
   // Show the ant itself at the head of its trail (self-corrects next flip).
-  lifeSpr.fillRect(antX * LIFE_CELL, antY * LIFE_CELL, LIFE_CELL, LIFE_CELL, 1);
+  // Accent color so the ant reads apart from its own trail.
+  lifeSpr.fillRect(antX * LIFE_CELL, antY * LIFE_CELL, LIFE_CELL, LIFE_CELL, 2);
   lifeSpr.pushSprite(0, 0);
 }
 
@@ -838,7 +866,9 @@ void updateFire() {
     for (int x = 0; x < FIRE_W; x++) {
       uint8_t h = fireHeat[y * FIRE_W + x];
       uint8_t t = (uint8_t)(BAYER4[y & 3][x & 3] * 16 + 8);
-      if (h > t) lifeSpr.fillRect(x * LIFE_CELL, y * LIFE_CELL, LIFE_CELL, LIFE_CELL, 1);
+      if (h > t)
+        lifeSpr.fillRect(x * LIFE_CELL, y * LIFE_CELL, LIFE_CELL, LIFE_CELL,
+                         (h > 210) ? 2 : 1);   // hot core = accent
     }
   }
   lifeSpr.pushSprite(0, 0);
@@ -945,11 +975,11 @@ void updatePipes() {
     for (int k = -(thick / 2); k <= thick / 2; k++)
       lifeSpr.drawLine(x0 + (int)lroundf(px * k), y0 + (int)lroundf(py * k),
                        x1 + (int)lroundf(px * k), y1 + (int)lroundf(py * k), 1);
-    if (turned) lifeSpr.fillCircle(x0, y0, thick + 1, 1);   // joint sphere
+    if (turned) lifeSpr.fillCircle(x0, y0, thick + 1, 2);   // joint sphere (accent)
 
     p->x = nx; p->y = ny; p->z = nz; p->steps++;
     if (p->steps >= p->maxSteps) {
-      lifeSpr.fillCircle(x1, y1, thick, 1);                  // end cap
+      lifeSpr.fillCircle(x1, y1, thick, 2);                  // end cap (accent)
       p->alive = false;
       pipesAlive--;
     }
@@ -1054,7 +1084,8 @@ void updateRadar() {
   }
   if (random(100) < 1) radarSpawnBlip();   // occasional new contact
 
-  // Dither the intensity field into the shared 1bpp sprite at 2x2 blocks.
+  // Dither the intensity field into the shared 4bpp sprite at 2x2 blocks,
+  // then redraw the sweep as the accent color so the beam reads hot.
   lifeSpr.fillSprite(0);
   for (int y = 0; y < RADAR_H; y++) {
     for (int x = 0; x < RADAR_W; x++) {
@@ -1062,6 +1093,11 @@ void updateRadar() {
       uint8_t t = (uint8_t)(BAYER4[y & 3][x & 3] * 16 + 8);
       if (v > t) lifeSpr.fillRect(x * LIFE_CELL, y * LIFE_CELL, LIFE_CELL, LIFE_CELL, 1);
     }
+  }
+  {
+    int ex = (int)lroundf((60.0f + 58.0f * cosf(radarAngle)) * LIFE_CELL);
+    int ey = (int)lroundf((60.0f + 58.0f * sinf(radarAngle)) * LIFE_CELL);
+    lifeSpr.drawLine(120, 120, ex, ey, 2);
   }
   lifeSpr.pushSprite(0, 0);
 }
@@ -1105,7 +1141,7 @@ void updateStarfield() {
       s->hadPos = false;
       continue;
     }
-    if (s->hadPos) lifeSpr.drawLine(s->px, s->py, sx, sy, 1);   // streak
+    if (s->hadPos) lifeSpr.drawLine(s->px, s->py, sx, sy, 2);   // streak (accent)
     else           lifeSpr.drawPixel(sx, sy, 1);                // far: dot
     s->px = sx; s->py = sy; s->hadPos = true;
   }
@@ -1163,7 +1199,8 @@ void updateOsc() {
   else        radarPlot(xi, yi, 255);
   oscPX = xi; oscPY = yi; oscHad = true;
 
-  // Dither the intensity field into the shared 1bpp sprite at 2x2 blocks.
+  // Dither the intensity field into the shared 4bpp sprite at 2x2 blocks,
+  // then redraw the beam as the accent color so the trace outranks the grid.
   lifeSpr.fillSprite(0);
   for (int y = 0; y < RADAR_H; y++) {
     for (int x = 0; x < RADAR_W; x++) {
@@ -1171,6 +1208,13 @@ void updateOsc() {
       uint8_t t = (uint8_t)(BAYER4[y & 3][x & 3] * 16 + 8);
       if (v > t) lifeSpr.fillRect(x * LIFE_CELL, y * LIFE_CELL, LIFE_CELL, LIFE_CELL, 1);
     }
+  }
+  if (oscHad) {
+    int ax = oscPX * LIFE_CELL, ay = oscPY * LIFE_CELL;
+    int bx = xi * LIFE_CELL,    by = yi * LIFE_CELL;
+    lifeSpr.drawLine(ax - 1, ay, bx - 1, by, 2);
+    lifeSpr.drawLine(ax,     ay, bx,     by, 2);
+    lifeSpr.drawLine(ax + 1, ay, bx + 1, by, 2);
   }
   lifeSpr.pushSprite(0, 0);
 }
@@ -1293,9 +1337,9 @@ void updatePong() {
   lifeSpr.fillSprite(0);
   for (int y = PONG_TOP; y < PONG_BOT; y += 10)          // dashed center line
     lifeSpr.fillRect(119, y, 2, 5, 1);
-  lifeSpr.fillRect(PONG_PAD_X_L, (int)pongL.y - PONG_PAD_H / 2, 4, PONG_PAD_H, 1);
-  lifeSpr.fillRect(PONG_PAD_X_R, (int)pongR.y - PONG_PAD_H / 2, 4, PONG_PAD_H, 1);
-  lifeSpr.fillRect((int)pongBallX - 2, (int)pongBallY - 2, 4, 4, 1);
+  lifeSpr.fillRect(PONG_PAD_X_L, (int)pongL.y - PONG_PAD_H / 2, 4, PONG_PAD_H, 2);
+  lifeSpr.fillRect(PONG_PAD_X_R, (int)pongR.y - PONG_PAD_H / 2, 4, PONG_PAD_H, 2);
+  lifeSpr.fillRect((int)pongBallX - 2, (int)pongBallY - 2, 4, 4, 2);
   pongScoreDraw(pongScoreL, 86);
   pongScoreDraw(pongScoreR, 154);
   lifeSpr.pushSprite(0, 0);
@@ -1366,7 +1410,7 @@ void updateEq() {
     int py = eqBaseY[i] - ph - 3;
     int top = eqBaseY[i] - eqMaxH[i];
     if (py < top) py = top;
-    lifeSpr.fillRect(eqX[i], py, 8, 2, 1);
+    lifeSpr.fillRect(eqX[i], py, 8, 2, 2);   // peak-hold cap = accent
   }
   lifeSpr.pushSprite(0, 0);
 }

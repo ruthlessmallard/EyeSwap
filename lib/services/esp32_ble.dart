@@ -168,38 +168,48 @@ class ESP32BLEService {
   }
 
   /// Send background color to ESP32 (JSON: {"type":"config","bg_color":"#RRGGBB"})
-  Future<bool> sendColor(Color color) async {
+  /// [accent] is the optional secondary color; omit it for a single-color setup.
+  Future<bool> sendColor(Color color, {Color? accent}) async {
     if (!_isConnected || _configChar == null) return false;
-
-    final hexColor = '#${color.red.toRadixString(16).padLeft(2, '0')}'
-        '${color.green.toRadixString(16).padLeft(2, '0')}'
-        '${color.blue.toRadixString(16).padLeft(2, '0')}';
 
     final packet = jsonEncode({
       'type': 'config',
-      'bg_color': hexColor.toUpperCase(),
+      'bg_color': _hex(color),
+      if (accent != null) 'accent_color': _hex(accent),
     });
 
     return _sendConfigPacket(packet);
   }
 
-  /// Send both brightness offset and color in one packet
-  Future<bool> sendConfig({required int brightnessOffset, required Color color}) async {
+  /// Send both brightness offset and colors in one packet.
+  /// [color] = primary, [accent] = secondary (defaults to primary, so a
+  /// single-color choice just sends the same RGB twice).
+  Future<bool> sendConfig({
+    required int brightnessOffset,
+    required Color color,
+    Color? accent,
+  }) async {
     if (!_isConnected || _configChar == null) return false;
 
     brightnessOffset = brightnessOffset.clamp(-50, 50);
-
-    final hexColor = '#${color.red.toRadixString(16).padLeft(2, '0')}'
-        '${color.green.toRadixString(16).padLeft(2, '0')}'
-        '${color.blue.toRadixString(16).padLeft(2, '0')}';
+    accent ??= color;
 
     final packet = jsonEncode({
       'type': 'config',
       'brightness_offset': brightnessOffset,
-      'bg_color': hexColor.toUpperCase(),
+      'bg_color': _hex(color),
+      'accent_color': _hex(accent),
     });
 
     return _sendConfigPacket(packet);
+  }
+
+  /// '#RRGGBB' uppercase, matching the firmware's parser.
+  static String _hex(Color c) {
+    return ('#${c.red.toRadixString(16).padLeft(2, '0')}'
+            '${c.green.toRadixString(16).padLeft(2, '0')}'
+            '${c.blue.toRadixString(16).padLeft(2, '0')}')
+        .toUpperCase();
   }
 
   /// Send a test flash command

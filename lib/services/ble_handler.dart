@@ -133,6 +133,7 @@ class BleHandler {
   Future<bool> sendDisplayConfig({
     required int brightnessOffset,
     required String colorHex,
+    String? accentHex,
   }) async {
     final characteristic = _configCharacteristic;
     if (characteristic == null) return false;
@@ -143,6 +144,7 @@ class BleHandler {
         'type': 'config',
         'brightness_offset': brightness,
         'bg_color': colorHex.toUpperCase(),
+        if (accentHex != null) 'accent_color': accentHex.toUpperCase(),
       });
       await characteristic.write(utf8.encode(packet), withoutResponse: true);
       return true;
