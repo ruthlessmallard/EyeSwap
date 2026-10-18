@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// First-launch safety disclaimer. Deadpan on the surface, but the core
-/// message is real: this is a stationary fleet-vehicle gadget, not a
-/// driving aid. Tone borrowed from the README (which assumes zero
-/// liability for your mother being disappointed in you).
+/// First-launch scope notice. Deadpan on the surface, but the core
+/// message is real: EyeSwap is a desk gadget, not a safety device and
+/// not a workaround for workplace media rules. Tone borrowed from the
+/// README (which assumes zero liability for your mother being
+/// disappointed in you).
 ///
-/// Sets prefs key `disclaimer_accepted` when acknowledged.
+/// Sets prefs key `disclaimer_accepted` when the user accepts
+/// responsibility.
 class DisclaimerScreen extends StatefulWidget {
   /// When false (first-launch gate) the user cannot back out.
   final bool dismissible;
@@ -37,7 +39,7 @@ class _DisclaimerScreenState extends State<DisclaimerScreen> {
         appBar: AppBar(
           automaticallyImplyLeading: widget.dismissible,
           title: const Text(
-            'EYESWAP SAFETY NOTICE',
+            'EYESWAP SCOPE NOTICE',
             style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 2),
           ),
           backgroundColor: const Color(0xFF1A1A1A),
@@ -72,7 +74,7 @@ class _DisclaimerScreenState extends State<DisclaimerScreen> {
                                   SizedBox(width: 10),
                                   Expanded(
                                     child: Text(
-                                      'DO NOT USE WHILE OPERATING A MOTOR VEHICLE',
+                                      'NOT FOR VEHICLE USE',
                                       style: TextStyle(
                                         color: _red,
                                         fontSize: 18,
@@ -85,7 +87,9 @@ class _DisclaimerScreenState extends State<DisclaimerScreen> {
                               ),
                               SizedBox(height: 12),
                               Text(
-                                'DO NOT USE ON PUBLIC ROADS.\nDO NOT USE NEAR OTHER HUMANS.',
+                                'NOT FOR USE IN DANGEROUS SITUATIONS.\n'
+                                'NOT A WORKAROUND FOR SCREEN-FREE OR\n'
+                                'DEVICE-PROHIBITED SITUATIONS.',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 15,
@@ -98,15 +102,16 @@ class _DisclaimerScreenState extends State<DisclaimerScreen> {
                         ),
                         const SizedBox(height: 20),
                         const Text(
-                          'EyeSwap is a personal media & navigation controller for '
-                          'STATIONARY FLEET VEHICLES in controlled environments. It is '
-                          'not a driving aid, not a substitute for attention or '
-                          'situational awareness, and definitely not a replacement for '
-                          'basic common sense.',
+                          'EyeSwap is screen-free media control for your desk — '
+                          'three tactile buttons and a small round display, with '
+                          'your phone in your pocket. It is a personal project '
+                          'shared as-is, not a product, not a safety device, and '
+                          'not a replacement for workplace rules or common sense.',
                           style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
                         ),
                         const SizedBox(height: 20),
                         const Text(
+                          'By using this software you accept responsibility. '
                           'The author, contributors, and this software assume '
                           'ZERO LIABILITY for:',
                           style: TextStyle(
@@ -116,11 +121,11 @@ class _DisclaimerScreenState extends State<DisclaimerScreen> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        const _Bullet('Distracted driving incidents'),
-                        const _Bullet('Fleet manager disciplinary actions'),
+                        const _Bullet('Workplace media-policy violations'),
+                        const _Bullet('Boss disciplinary actions'),
+                        const _Bullet('Misuse of a personal device at work'),
                         const _Bullet('Insurance claim denials'),
                         const _Bullet('Arguing with Audible chapter-skip timing'),
-                        const _Bullet('Driving into a ditch mid-podcast'),
                         const _Bullet('Your mother being disappointed in you'),
                         const SizedBox(height: 20),
                         Container(
@@ -159,7 +164,7 @@ class _DisclaimerScreenState extends State<DisclaimerScreen> {
                       ),
                     ),
                     child: const Text(
-                      'I UNDERSTAND',
+                      'I ACCEPT RESPONSIBILITY',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
