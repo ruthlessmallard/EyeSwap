@@ -22,7 +22,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Color _selectedColor = const Color(0xFFFFAA00); // Default amber
   Color _selectedAccent = const Color(0xFFFFFFFF); // Default white
   
-  // Preset colors for common dash colors
+  // Preset colors for common desk colors
   final List<Map<String, dynamic>> _presetColors = [
     {'name': 'Amber', 'color': const Color(0xFFFFAA00), 'hex': 'FFAA00'},
     {'name': 'Blue', 'color': const Color(0xFF0066FF), 'hex': '0066FF'},
@@ -36,21 +36,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _statusMessage = '';
   
   // Idle animation mode
-  String _idleAnimation = 'marquee'; // marquee, static, none
+  String _idleAnimation = 'static'; // firmware ids; marquee is a link indicator, not a mode
   
   final List<Map<String, dynamic>> _idleAnimations = [
-    {'id': 'marquee', 'name': 'Text Marquee', 'icon': Icons.text_fields},
+    {'id': 'coin', 'name': 'Coin Dozer', 'icon': Icons.monetization_on},
     {'id': 'static', 'name': 'Game of Life', 'icon': Icons.grain},
     {'id': 'now_playing', 'name': 'Now Playing', 'icon': Icons.music_note},
     {'id': 'boids', 'name': 'Boids', 'icon': Icons.flight},
     {'id': 'ant', 'name': "Langton's Ant", 'icon': Icons.grid_on},
     {'id': 'fire', 'name': 'Fire', 'icon': Icons.local_fire_department},
+    {'id': 'knight', 'name': 'Knight Run', 'icon': Icons.directions_run},
     {'id': 'pipes', 'name': 'Pipes', 'icon': Icons.plumbing},
-    {'id': 'radar', 'name': 'Radar Sweep', 'icon': Icons.radar},
-    {'id': 'starfield', 'name': 'Starfield', 'icon': Icons.star},
-    {'id': 'oscilloscope', 'name': 'Oscilloscope', 'icon': Icons.show_chart},
-    {'id': 'pong', 'name': 'Pong', 'icon': Icons.sports_esports},
-    {'id': 'eq', 'name': 'Spectrum (EQ)', 'icon': Icons.graphic_eq},
+    {'id': 'pet', 'name': 'Pet', 'icon': Icons.pets},
+    {'id': 'crystal', 'name': 'Crystal', 'icon': Icons.diamond},
+    {'id': 'snake', 'name': 'Snake', 'icon': Icons.videogame_asset},
+    {'id': 'rally', 'name': 'Rally', 'icon': Icons.sports_tennis},
+    {'id': 'eye', 'name': 'Eye', 'icon': Icons.remove_red_eye},
     {'id': 'cycle', 'name': 'Random Cycle', 'icon': Icons.shuffle},
   ];
 
@@ -64,7 +65,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _idleAnimation = prefs.getString('idle_animation') ?? 'marquee';
+      // A preference saved by an older build may name something the pod no
+      // longer treats as an animation (e.g. marquee). Fall back to the pod's
+      // own default instead of pushing a stale id on connect.
+      final savedIdle = prefs.getString('idle_animation');
+      final known = _idleAnimations.any((a) => a['id'] == savedIdle);
+      _idleAnimation = known ? savedIdle! : 'static';
       _brightnessOffset = prefs.getDouble('brightness_offset') ?? 0;
       final hex = prefs.getString('bg_color') ?? 'FFAA00';
       _selectedColor = Color(int.parse('FF$hex', radix: 16));
@@ -264,7 +270,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _buildSectionTitle('Background Color'),
             const SizedBox(height: 8),
             const Text(
-              'Choose a color to match your dash',
+              'Choose a color to match your desk',
               style: TextStyle(color: Colors.white54, fontSize: 12),
             ),
             const SizedBox(height: 16),

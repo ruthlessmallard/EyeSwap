@@ -62,6 +62,21 @@ the on-screen 3-button UI for bench testing.
 - Media control: YouTube Music ↔ Audible switching
 - Black/grey/red chunky UI aesthetic
 
+### Marquee: connection indicator, not an animation
+
+The scrolling EYESWAP marquee is no longer selectable. It is the pod's link
+indicator:
+
+- Boot, or any disconnect → marquee for **5 minutes**, or until the app connects.
+- Still unlinked after 5 minutes → the user's chosen animation plays.
+- Every **10 minutes** of unlinked animation → **one full scroll pass** of the
+  marquee, then back to the animation.
+- If the chosen animation is **Now Playing** and nothing is linked, a random
+  animation is substituted — there is no track to show without the phone.
+
+`{"type":"mode","animation":"marquee"}` is still accepted, but it only runs one
+pass as a test; it is never saved as your choice.
+
 ### Idle Animation Modes
 
 Selectable from the settings dropdown; the choice is saved and re-pushed on
@@ -69,24 +84,25 @@ connect.
 
 | # | Mode | What it does |
 |---|------|--------------|
-| 0 | **Text Marquee** | Scrolling one-way ticker |
+| 0 | **Coin Dozer** | Blocky coins drop in ones, twos and threes; a slow plate shoves the pile off the edge |
 | 1 | **Game of Life** | Conway's Game of Life, 120×120 torus, reseeds when it dies/freezes |
 | 2 | **Now Playing** | PLAYING/PAUSED + title + artist card |
 | 3 | **Boids** | Flocking sim — "little fish" 🐟 |
 | 4 | **Langton's Ant** | Two-state turmite trail |
 | 5 | **Fire** | Doom-style rising flame |
-| 6 | **Pipes** | 5 plumbers wandering a 7×7×7 lattice, ortho 3/4 view |
-| 7 | **Radar Sweep** | Phosphor radar with rotating beam + fading blips |
-| 8 | **Starfield** | Warp streaks rushing out of the center |
-| 9 | **Oscilloscope** | Lissajous trace over a faint graticule |
-| 10 | **Pong** | Self-playing pong against AI paddles |
-| 11 | **Spectrum (EQ)** | Fake LED spectrum bars with a synthetic beat |
+| 6 | **Knight Run** | Self-playing runner — hops hay bales and brick walls, ducks under arrows |
+| 7 | **Pipes** | 5 plumbers wandering a 7×7×7 lattice, ortho 3/4 view |
+| 8 | **Pet** | Ambient pixel-goo creature; feeds and tidies itself, no input |
+| 9 | **Crystal** | Diffusion-limited aggregation; grows, holds, regrows |
+| 10 | **Snake** | Self-playing snake with lookahead survival check |
+| 11 | **Rally** | Self-playing paddle rally, blocky scoreboard digits |
+| 12 | **Eye** | Pixel eyeball — human/cat/goat/robot, drifts when bored, snaps when something catches it |
 | — | **Random Cycle** | Auto-rotates through the visual roster every **10 minutes** |
 
 **Two-tone color:** every animation uses a **primary** and an **accent** color.
 The accent highlights the element that should pop — the white-hot core of the
 fire, every fifth boid, the ant itself, pipe joints/end caps, the radar sweep
-beam, the oscilloscope trace, starfield warp streaks, pong paddles + ball, and
+creature's eyes, crystal rim, the snake's head + pellet, rally paddles + ball, the eyeball's iris, the knight's plume + blade, the runner's high score, the dozer plate + coin rims, and
 the EQ peak-hold caps. Set **Accent = primary** (or hit **Match primary**) for
 a single-color look. Both colors ride in the config packet and persist in NVS.
 
@@ -194,8 +210,10 @@ BLE UUIDs (must match the Flutter app exactly):
 {"type":"config","brightness_offset":0,"bg_color":"#FFAA00","accent_color":"#0066FF"}
 
 // App → ESP32 animation mode
-//   marquee | static | now_playing | boids | ant | fire | pipes |
-//   radar | starfield | oscilloscope | pong | eq | cycle
+//   coin | static | now_playing | boids | ant | fire | knight | pipes |
+//   pet | crystal | snake | rally | eye | cycle
+//   (legacy aliases still accepted: radar, starfield, oscilloscope, pong, eq)
+//   ("marquee" is accepted but only runs one indicator pass; it is not a mode)
 {"type":"mode","animation":"fire"}
 {"type":"mode","animation":"cycle"}   // Random Cycle ("random" also accepted)
 
