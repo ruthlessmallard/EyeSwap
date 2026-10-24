@@ -2073,10 +2073,11 @@ static bool    svHit = false;
 static bool    svWrecked[2] = {false, false};
 static int     svDistance = 420;
 static int     svLandX = 144;
-static int8_t  svFlagX[SV_FLAGS];
+static int16_t svFlagX[SV_FLAGS];
 static uint8_t svFlagSide[SV_FLAGS];
 static uint8_t svFlagN = 0;
 static uint8_t svWinner = 0;
+static bool    svFlagFresh = false;     // newest flag belongs to the shot in flight
 
 static uint8_t svInk(uint8_t side) { return side == 0 ? 1 : 2; }
 static uint8_t svOther(uint8_t side) { return side == 0 ? 2 : 1; }
@@ -2095,6 +2096,33 @@ static void svFlag(int x, uint8_t side) {
   lifeSpr.fillRect(x, g - 20, 2, 20, svOther(side));
   lifeSpr.fillRect(x + 2, g - 20, 10, 7, svInk(side));
   lifeSpr.fillRect(x + 4, g - 18, 6, 2, 0);
+}
+
+// the flag rises out of the burst point instead of popping in
+static void svFlagPlant(int x, uint8_t side, float t) {
+  const int g = SV_GROUND;
+  const float tp = t < 0.45f ? t / 0.45f : 1.0f;     // pole rises
+  const int ph = 2 + (int)(18.0f * tp);
+  lifeSpr.fillRect(x, g - ph, 2, ph, svOther(side));
+  if (t > 0.45f) {                                   // cloth unfurls
+    const float tc = t < 0.75f ? (t - 0.45f) / 0.30f : 1.0f;
+    const int cw = 2 + (int)(8.0f * tc);
+    lifeSpr.fillRect(x + 2, g - ph, cw, 7, svInk(side));
+    if (cw >= 8) lifeSpr.fillRect(x + 4, g - ph + 2, 4, 2, 0);
+  }
+}
+
+// chevron pointing the way the shell flies
+static void svChevron(int x, int dir) {
+  if (dir > 0) {
+    lifeSpr.fillRect(x, 189, 3, 4, 1);
+    lifeSpr.fillRect(x + 3, 191, 3, 4, 1);
+    lifeSpr.fillRect(x, 195, 3, 4, 1);
+  } else {
+    lifeSpr.fillRect(x + 3, 189, 3, 4, 1);
+    lifeSpr.fillRect(x, 191, 3, 4, 1);
+    lifeSpr.fillRect(x + 3, 195, 3, 4, 1);
+  }
 }
 
 static void svCannon(int x, uint8_t ink, uint8_t rim, bool faceRight, bool wreck, int recoil) {
@@ -2127,12 +2155,17 @@ static void svHud() {
   lifeSpr.fillRect(112, 34, 10, 2, 1);
   if (svPhase == SV_MATCH) return;
 
-  blockNumber(svDistance, 50, 190, 2, 1);              // range in metres
-  const bool atShooter = (svPhase == SV_AIM || svPhase == SV_RECOIL);
-  const int ax = atShooter ? 116 : 136;
-  const int dir = atShooter ? 1 : -1;
-  for (int i = 0; i < 3; i++)                          // arrow to the enemy
-    lifeSpr.fillRect(ax + dir * i * 5, 193 - i * 2, 5, 3 + i * 3, 2);
+  // one cluster: range number beside the arrow, arrow points the way the shell flies
+  const bool shellGoesRight = (svPhase == SV_AIM || svPhase == SV_RECOIL);
+  if (shellGoesRight) {
+    blockNumber(svDistance, 92, 190, 2, 1);
+    svChevron(122, 1);
+    svChevron(130, 1);
+  } else {
+    svChevron(96, -1);
+    svChevron(104, -1);
+    blockNumber(svDistance, 114, 190, 2, 1);
+  }
   for (int i = 0; i < svShotsLeft; i++)                // rounds left this group
     lifeSpr.fillRect(162 + i * 8, 191, 5, 5, svInk(svShooter));
 }
@@ -2161,7 +2194,13 @@ static void svRender() {
     return;
   }
 
-  for (int i = 0; i < svFlagN; i++) svFlag(svFlagX[i], svFlagSide[i]);
+  for (int i = 0; i < svFlagN; i++) {
+    if (svPhase == SV_FLAG && svFlagFresh && i == svFlagN - 1)
+      svFlagPlant(svFlagX[i], svFlagSide[i],
+                  (float)(millis() - svPhaseAt) / (float)SV_FLAG_MS);
+    else
+      svFlag(svFlagX[i], svFlagSide[i]);
+  }
 
   const bool atShooter = (svPhase == SV_AIM || svPhase == SV_RECOIL);
   const uint8_t gunSide = atShooter ? svShooter : (uint8_t)(1 - svShooter);
@@ -2208,6 +2247,7 @@ void salvoInit() {
   svBias[0] = svBias[1] = 0.0f;
   svWrecked[0] = svWrecked[1] = false;
   svFlagN = 0;
+  svFlagFresh = false;
   svShotsLeft = 3;
   svShooter = (uint8_t)random(2);
   svWinner = 0;
@@ -2268,6 +2308,7 @@ void updateSalvo() {
           svKills[svShooter]++;
           svWrecked[1 - svShooter] = true;
           svBias[svShooter] = 0.0f;
+          svFlagFresh = false;
         } else {
           svBias[svShooter] -= svOffset * SV_AIM_GAIN;      // bracket from the flag
           if (svFlagN >= SV_FLAGS) {                        // drop the oldest flag
@@ -2277,9 +2318,10 @@ void updateSalvo() {
             }
             svFlagN = SV_FLAGS - 1;
           }
-          svFlagX[svFlagN] = (int8_t)(svLandX - 120);
+          svFlagX[svFlagN] = (int16_t)svLandX;
           svFlagSide[svFlagN] = svShooter;
           svFlagN++;
+          svFlagFresh = true;
         }
         svSetPhase(SV_FLAG);
       }
@@ -2294,6 +2336,7 @@ void updateSalvo() {
           svWrecked[0] = svWrecked[1] = false;
           svBias[0] = svBias[1] = 0.0f;
           svFlagN = 0;
+          svFlagFresh = false;
           svShotsLeft = 3;
           svShooter = (uint8_t)(1 - svShooter);
           svNewDistance();
@@ -2305,7 +2348,13 @@ void updateSalvo() {
             svBias[svShooter] = 0.0f;       // fresh group, fresh bracket
             svShooter = (uint8_t)(1 - svShooter);
           }
-          svSetPhase(SV_AIM);
+          if (svShotsLeft == 3) {           // first shot of a group: show the gun
+            svSetPhase(SV_AIM);
+          } else {                          // shots 2-3: fire off-screen, stay on target
+            svFire();
+            svWaitUntil = now + SV_WAIT_MIN + random(SV_WAIT_MAX - SV_WAIT_MIN);
+            svSetPhase(SV_WAIT);
+          }
         }
       }
       break;
@@ -2317,6 +2366,7 @@ void updateSalvo() {
         svWrecked[0] = svWrecked[1] = false;
         svBias[0] = svBias[1] = 0.0f;
         svFlagN = 0;
+        svFlagFresh = false;
         svShotsLeft = 3;
         svShooter = (uint8_t)random(2);
         svNewDistance();
