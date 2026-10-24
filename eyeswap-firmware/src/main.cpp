@@ -230,6 +230,7 @@ static uint16_t bnLeafN = 0;
 static uint16_t bnLeafAlive = 0;
 static uint16_t bnFront[BN_FRONT_MAX];        // wood pixels worth growing from
 static uint16_t bnFrontN = 0;
+static uint16_t bnFrontPos = 0;               // ring write head
 static uint16_t bnRecent[BN_DIEBACK];         // newest wood, for dieback
 static uint8_t  bnRecentI = 0;
 static unsigned long bnLastLeaf = 0, bnLastWood = 0, bnShakeStart = 0, bnLastTick = 0;
@@ -246,9 +247,16 @@ static inline uint8_t bnAt(int x, int y) {
   return bnWood[y * BN_W + x];
 }
 
+// Ring, not a growing list. Planting a 6 px trunk pushes itself plus four
+// neighbours per pixel, which saturated the old fixed list before any twig
+// existed -- twigs then never entered the front, so no leaf could ever be
+// placed on them and growth froze behind an unreachable canopy.
 static void bnFrontPush(int x, int y) {
-  if (bnFrontN >= BN_FRONT_MAX) return;
-  bnFront[bnFrontN++] = (uint16_t)(y * BN_W + x);
+  if (x < 0 || y < 0 || x >= BN_W || y >= BN_H) return;
+  if (!bnAt(x, y)) return;
+  bnFront[bnFrontPos] = (uint16_t)(y * BN_W + x);
+  bnFrontPos = (uint16_t)((bnFrontPos + 1) % BN_FRONT_MAX);
+  if (bnFrontN < BN_FRONT_MAX) bnFrontN++;
 }
 
 static void bnSetWood(int x, int y, uint8_t t) {
@@ -325,7 +333,7 @@ static bool bnNearEdgeOrPot(int x, int y) {
 // pick a wood pixel that still has somewhere to grow, inside a tier band and
 // above the bare bole line. Nothing grows or carries leaves in the no-leaf zone.
 static bool bnPickFrontIn(int loT, int hiT, int* rx, int* ry) {
-  for (int tries = 0; tries < 160 && bnFrontN; tries++) {
+  for (int tries = 0; tries < 400 && bnFrontN; tries++) {
     const uint16_t idx = bnFront[bnRand() % bnFrontN];
     const int x = idx % BN_W, y = idx / BN_W;
     const uint8_t t = bnWood[idx];
@@ -397,21 +405,22 @@ static void bnWoodStep() {
   }
 }
 
-static void bnAddLeaf() {
+static bool bnAddLeaf() {
   int x = 0, y = 0;
-  if (!bnPickFrontIn(1, 2, &x, &y)) return;   // tier 3 is bole/limb: stays bare
+  if (!bnPickFrontIn(1, 2, &x, &y)) return false;   // tier 3 is bole/limb: bare
   for (int k = 0; k < 4; k++) {
     const int nx = x + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
     const int ny = y + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
     if (bnAt(nx, ny)) continue;
-    if (bnLeafN >= BN_LEAF_MAX) return;
+    if (bnLeafN >= BN_LEAF_MAX) return false;
     bnLeaf[bnLeafN].x = (int16_t)(nx + (int)(bnRand() % 3) - 1);
     bnLeaf[bnLeafN].y = (int16_t)(ny + (int)(bnRand() % 3) - 1);
     bnLeaf[bnLeafN].alive = 1;
     bnLeafN++;
     bnLeafAlive++;
-    return;
+    return true;
   }
+  return false;
 }
 
 static int bnLeafTarget() {
@@ -426,7 +435,8 @@ static float   bnTa[BN_TRUNK_LEN];
 
 static void bnPlant() {
   memset(bnWood, 0, sizeof(bnWood));
-  bnWoodN = 0; bnLeafWood = 0; bnFrontN = 0; bnLeafN = 0; bnLeafAlive = 0;
+  bnWoodN = 0; bnLeafWood = 0; bnFrontN = 0; bnFrontPos = 0;
+  bnLeafN = 0; bnLeafAlive = 0;
   bnRecentI = 0;
   memset(bnRecent, 0, sizeof(bnRecent));
 
@@ -492,11 +502,14 @@ static void bnTick() {
   if (now - bnPlantAt >= BN_REPLANT_MS) { bnPlant(); return; }
 #endif
   const int target = bnLeafTarget();
+  bool leafStuck = false;
   if ((int)bnLeafAlive < target && now - bnLastLeaf >= BN_LEAF_MS) {
     bnLastLeaf = now;
-    bnAddLeaf();
+    leafStuck = !bnAddLeaf();       // nowhere legal to hang a leaf this beat
   }
-  if ((int)bnLeafAlive >= target) {
+  // belt and braces: if the canopy literally cannot be filled, the tree keeps
+  // building instead of freezing forever behind an impossible leaf target
+  if ((int)bnLeafAlive >= target || leafStuck) {
     unsigned long interval = BN_WOOD_BASE * (unsigned long)(bnWoodN < 40 ? 40 : bnWoodN) / BN_SANITY;
     if (interval < BN_WOOD_MIN) interval = BN_WOOD_MIN;
     if (now - bnLastWood >= interval) {
