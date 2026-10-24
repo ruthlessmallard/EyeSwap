@@ -191,33 +191,37 @@ static int antX, antY, antDir;   // dir: 0=N 1=E 2=S 3=W
 static unsigned long lastAntUpdate = 0;
 #endif
 
-// ==== Bonsai (MODE_BONSAI): a slow, persistent tree ====
-// Grows in real time whether or not it is on screen. The structure is
-// deterministic from a seed, so NVS only keeps the seed and elapsed growth.
-// Pot takes the primary colour, flowers the secondary; wood and foliage stay
-// natural on purpose -- the tree should look like a tree, not like the theme.
-#define BN_FULL_MS    7200000UL        // two hours from sprout to full canopy
-#define BN_GRND       180              // soil line
-#define BN_SEGS       150
-#define BN_LEAVES     250
-#define BN_FALL       10
+// ==== Bonsai (MODE_BONSAI): DLA wood, foliage gates the growth ====
+// A trunk is planted; walkers accrete wood one pixel at a time (crystal
+// rules). Leaves scale with wood mass; wood only advances once the canopy has
+// caught up, and every wood step takes longer as the tree gets bigger.
+#define BN_W          240
+#define BN_H          240
+#define BN_GRND       180
+#define BN_SANITY     4           // wood pixels per leaf
+#define BN_LEAF_MS    800UL       // one leaf per beat until the canopy is even
+#define BN_WOOD_BASE  480UL       // pacing constant for the size term
+#define BN_WOOD_MIN   2000UL
+#define BN_WOOD_MAX   1400
 #define BN_SHAKE_MS   1200UL
-#define BN_REGROW_MS  5000UL
+#define BN_THIN_MAX   60          // 1-px branches: quarter of the screen
+#define BN_DIEBACK    60          // cut back a quarter of the screen
+#define BN_LEAF_MAX   430
+#define BN_FRONT_MAX  1200
 
-struct BnSeg  { int16_t x0, y0, x1, y1; uint8_t w; uint16_t t; };
-struct BnLeaf { int16_t x, y; uint16_t t; uint8_t kind; uint8_t on; };  // kind 0 leaf, 1 flower
-struct BnFall { float x, y, vx, vy; uint8_t live; };
+struct BnLf { int16_t x, y; uint8_t alive; };
 
-static BnSeg  bnSeg[BN_SEGS];
-static BnLeaf bnLeaf[BN_LEAVES];
-static BnFall bnFall[BN_FALL];
-static int16_t bnRest[BN_FALL];
-static uint8_t bnRestN = 0;
-static uint8_t bnNSeg = 0, bnNLeaf = 0;
-static uint32_t bnSeed = 1, bnGrowMs = 0;
-static unsigned long bnLastTick = 0, bnLastSave = 0, bnShakeStart = 0, bnRegrowAt = 0;
-static uint8_t bnRegrowPending = 0;
-static Preferences bnPrefs;
+static uint8_t  bnWood[BN_W * BN_H];          // tier per pixel, 0 = empty
+static uint16_t bnWoodN = 0;
+static uint32_t bnSeed = 0x9E3779B9u;
+static BnLf     bnLeaf[BN_LEAF_MAX];
+static uint16_t bnLeafN = 0;
+static uint16_t bnLeafAlive = 0;
+static uint16_t bnFront[BN_FRONT_MAX];        // wood pixels worth growing from
+static uint16_t bnFrontN = 0;
+static uint16_t bnRecent[BN_DIEBACK];         // newest wood, for dieback
+static uint8_t  bnRecentI = 0;
+static unsigned long bnLastLeaf = 0, bnLastWood = 0, bnShakeStart = 0, bnLastTick = 0;
 static bool bnReady = false;
 
 static uint32_t bnRand() {
@@ -225,158 +229,226 @@ static uint32_t bnRand() {
   return bnSeed;
 }
 
-static void bnSegAdd(int x0, int y0, int x1, int y1, uint8_t w, uint16_t t) {
-  if (bnNSeg >= BN_SEGS) return;
-  bnSeg[bnNSeg].x0 = (int16_t)x0; bnSeg[bnNSeg].y0 = (int16_t)y0;
-  bnSeg[bnNSeg].x1 = (int16_t)x1; bnSeg[bnNSeg].y1 = (int16_t)y1;
-  bnSeg[bnNSeg].w = w; bnSeg[bnNSeg].t = t;
-  bnNSeg++;
+static inline uint8_t bnAt(int x, int y) {
+  if (x < 0 || y < 0 || x >= BN_W || y >= BN_H) return 0;
+  return bnWood[y * BN_W + x];
 }
 
-static void bnLeafAdd(int x, int y, uint16_t t, uint8_t kind) {
-  if (bnNLeaf >= BN_LEAVES) return;
-  bnLeaf[bnNLeaf].x = (int16_t)x; bnLeaf[bnNLeaf].y = (int16_t)y;
-  bnLeaf[bnNLeaf].t = t; bnLeaf[bnNLeaf].kind = kind; bnLeaf[bnNLeaf].on = 1;
-  bnNLeaf++;
+static void bnFrontPush(int x, int y) {
+  if (bnFrontN >= BN_FRONT_MAX) return;
+  bnFront[bnFrontN++] = (uint16_t)(y * BN_W + x);
 }
 
-// recursive limb: walks in 3 px steps so the silhouette stays blocky
-static void bnBranch(float x, float y, float ang, float len, uint8_t depth,
-                     uint16_t t0, uint16_t t1) {
-  if (depth > 3 || len < 7.0f) return;
-  const int steps = (int)(len / 3.0f);
-  if (steps < 2) return;
-  const uint8_t w = (depth == 0) ? 12 : (depth == 1 ? 7 : (depth == 2 ? 4 : 3));
-  float cx = x, cy = y;
-  for (int i = 0; i < steps; i++) {
-    const float nx = cx + cosf(ang) * 3.0f;
-    const float ny = cy + sinf(ang) * 3.0f;
-    const uint16_t t = (uint16_t)(t0 + (uint32_t)(t1 - t0) * (uint32_t)i / (uint32_t)steps);
-    bnSegAdd((int)cx, (int)cy, (int)nx, (int)ny, w, t);
-    cx = nx; cy = ny;
-    ang += (float)((int)(bnRand() % 21) - 10) * 0.010f;
-    if (depth >= 1 && i > steps * 2 / 3 && (bnRand() % 100) < 30)
-      bnLeafAdd((int)cx + (int)(bnRand() % 9) - 4, (int)cy + (int)(bnRand() % 9) - 4, t, 0);
-    if (depth < 3 && i > steps / 4 && (bnRand() % 100) < 16) {
-      const float spread = 0.55f + (float)(bnRand() % 45) / 100.0f;
-      const float a2 = ang + ((bnRand() & 1) ? spread : -spread);
-      bnBranch(cx, cy, a2, len * 0.55f, (uint8_t)(depth + 1), t, t1);
+static void bnSetWood(int x, int y, uint8_t t) {
+  if (x < 1 || y < 1 || x >= BN_W - 1 || y >= BN_H - 1) return;
+  if (bnWood[y * BN_W + x]) return;
+  bnWood[y * BN_W + x] = t;
+  bnWoodN++;
+  bnRecent[bnRecentI] = (uint16_t)(y * BN_W + x);
+  bnRecentI = (uint8_t)((bnRecentI + 1) % BN_DIEBACK);
+  bnFrontPush(x, y);
+  for (int k = 0; k < 4; k++) {
+    const int nx = x + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
+    const int ny = y + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
+    if (bnAt(nx, ny)) bnFrontPush(nx, ny);
+  }
+}
+
+// step distance to thick wood: a 1-px branch may not run past a quarter screen
+static int bnDistToThick(int x, int y, int cap) {
+  static uint8_t  dist[61][61];
+  static uint16_t q[3721];
+  memset(dist, 0xFF, sizeof(dist));
+  int head = 0, tail = 0;
+  dist[30][30] = 0;
+  q[tail++] = (uint16_t)((30 << 6) | 30);
+  while (head < tail) {
+    const uint16_t cur = q[head++];
+    const int ox = cur >> 6, oy = cur & 63;
+    const int cd = dist[oy][ox];
+    if (bnAt(x + ox - 30, y + oy - 30) >= 3) return cd;
+    if (cd >= cap) continue;
+    for (int k = 0; k < 4; k++) {
+      const int nx = ox + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
+      const int ny = oy + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
+      if (nx < 0 || ny < 0 || nx > 60 || ny > 60 || dist[ny][nx] != 0xFF) continue;
+      dist[ny][nx] = (uint8_t)(cd + 1);
+      if (tail < 3721) q[tail++] = (uint16_t)((nx << 6) | ny);
     }
   }
-  if (depth >= 1) {                       // leaves hang off the outer limbs
-    const int nL = 4 + (int)(bnRand() % 4);
-    for (int k = 0; k < nL; k++)
-      bnLeafAdd((int)cx + (int)(bnRand() % 9) - 4,
-                (int)cy + (int)(bnRand() % 9) - 4,
-                (uint16_t)(t1 > 60 ? t1 - 60 : 0), 0);
+  return cap + 1;
+}
+
+static void bnDropLeavesNear(int x, int y) {
+  for (int i = 0; i < bnLeafN; i++) {
+    if (!bnLeaf[i].alive) continue;
+    if (abs(bnLeaf[i].x - x) <= 2 && abs(bnLeaf[i].y - y) <= 2) {
+      bnLeaf[i].alive = 0;
+      if (bnLeafAlive) bnLeafAlive--;
+    }
   }
-  if (depth >= 2 && (bnRand() % 100) < 45)  // flowers last, and only on tips
-    bnLeafAdd((int)cx + (int)(bnRand() % 7) - 3,
-              (int)cy + (int)(bnRand() % 7) - 3,
-              (uint16_t)(880 + bnRand() % 120), 1);
 }
 
-static void bnGen() {
-  bnNSeg = 0; bnNLeaf = 0;
-  bnBranch(120.0f, (float)(BN_GRND + 1), -1.5708f, 54.0f, 0, 0, 200);   // trunk
-  bnBranch(118.0f, 154.0f, -2.35f, 34.0f, 1, 180, 430);                 // low left
-  bnBranch(122.0f, 142.0f, -0.85f, 36.0f, 1, 200, 470);                 // low right
-  bnBranch(120.0f, 126.0f, -2.05f, 30.0f, 1, 300, 620);                 // high left
-  bnBranch(120.0f, 118.0f, -1.15f, 30.0f, 1, 320, 640);                 // high right
+// a branch that reaches the edge or the pot dies back a quarter screen
+static void bnDieback() {
+  for (int i = 0; i < BN_DIEBACK; i++) {
+    const uint16_t idx = bnRecent[(bnRecentI + BN_DIEBACK - 1 - i) % BN_DIEBACK];
+    if (!bnWood[idx]) continue;
+    const int x = idx % BN_W, y = idx / BN_W;
+    bnWood[idx] = 0;
+    if (bnWoodN) bnWoodN--;
+    bnDropLeavesNear(x, y);
+  }
 }
 
-static int bnProgress() {
-  const int p = (int)((uint64_t)bnGrowMs * 1000ULL / BN_FULL_MS);
-  return p > 1000 ? 1000 : p;
+static bool bnNearEdgeOrPot(int x, int y) {
+  if (x <= 4 || x >= BN_W - 5 || y <= 4) return true;
+  if (y >= 182 && x >= 44 && x <= 196) return true;   // pot mouth
+  return false;
+}
+
+// pick a wood pixel that still has somewhere to grow
+static bool bnPickFront(int* rx, int* ry) {
+  for (int tries = 0; tries < 90 && bnFrontN; tries++) {
+    const uint16_t idx = bnFront[bnRand() % bnFrontN];
+    const int x = idx % BN_W, y = idx / BN_W;
+    if (!bnWood[idx]) continue;
+    if (!bnAt(x - 1, y) || !bnAt(x + 1, y) || !bnAt(x, y - 1) || !bnAt(x, y + 1)) {
+      *rx = x; *ry = y;
+      return true;
+    }
+  }
+  return false;
+}
+
+// thickening: same tier may only be added against wood of that tier or thicker
+static void bnThicken() {
+  for (int tries = 0; tries < 60 && bnFrontN; tries++) {
+    const uint16_t idx = bnFront[bnRand() % bnFrontN];
+    const int cx = idx % BN_W, cy = idx / BN_W;
+    const uint8_t t = bnWood[idx];
+    if (t < 2) continue;
+    for (int k = 0; k < 4; k++) {
+      const int nx = cx + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
+      const int ny = cy + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
+      if (bnAt(nx, ny)) continue;
+      int support = 0;
+      for (int j = 0; j < 4; j++) {
+        const int ax = nx + ((j == 1) ? 1 : (j == 3) ? -1 : 0);
+        const int ay = ny + ((j == 0) ? -1 : (j == 2) ? 1 : 0);
+        if (bnAt(ax, ay) >= t) support++;
+      }
+      if (support >= 2) { bnSetWood(nx, ny, t); return; }
+    }
+  }
+}
+
+// one wood pixel, crystal style: a walker wanders until it touches wood
+static void bnWoodStep() {
+  if (bnWoodN >= BN_WOOD_MAX) return;
+  // release the walker just off the growth front, or it would wander the
+  // empty canopy for hours and never touch wood
+  int bx = 0, by = 0;
+  if (!bnPickFront(&bx, &by)) return;
+  const float ang = (float)(bnRand() % 360) * 0.0174533f;
+  const int rad = 7 + (int)(bnRand() % 9);
+  int wx = bx + (int)lroundf(cosf(ang) * (float)rad);
+  int wy = by + (int)lroundf(sinf(ang) * (float)rad);
+  if (bnAt(wx, wy)) return;
+  for (int step = 0; step < 900; step++) {
+    for (int k = 0; k < 4; k++) {
+      const int nx = wx + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
+      const int ny = wy + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
+      const uint8_t ct = bnAt(nx, ny);
+      if (!ct) continue;
+      const uint8_t nt = (ct >= 3) ? 2 : 1;
+      if (nt == 1 && bnDistToThick(wx, wy, BN_THIN_MAX) > BN_THIN_MAX) {
+        bnThicken();                      // too spindly out here: build girth
+        return;
+      }
+      bnSetWood(wx, wy, nt);
+      if (bnNearEdgeOrPot(wx, wy)) bnDieback();
+      return;
+    }
+    wx += (int)(bnRand() % 3) - 1;
+    wy += (int)(bnRand() % 3) - 1;
+    if (wx < 6 || wx > BN_W - 7 || wy < 6 || wy > BN_GRND - 10) return;
+  }
+}
+
+static void bnAddLeaf() {
+  int x = 0, y = 0;
+  if (!bnPickFront(&x, &y)) return;
+  for (int k = 0; k < 4; k++) {
+    const int nx = x + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
+    const int ny = y + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
+    if (bnAt(nx, ny)) continue;
+    if (bnLeafN >= BN_LEAF_MAX) return;
+    bnLeaf[bnLeafN].x = (int16_t)(nx + (int)(bnRand() % 3) - 1);
+    bnLeaf[bnLeafN].y = (int16_t)(ny + (int)(bnRand() % 3) - 1);
+    bnLeaf[bnLeafN].alive = 1;
+    bnLeafN++;
+    bnLeafAlive++;
+    return;
+  }
+}
+
+static int bnLeafTarget() {
+  int t = (int)(bnWoodN / BN_SANITY);
+  return (t > BN_LEAF_MAX) ? BN_LEAF_MAX : t;
+}
+
+static void bnPlant() {
+  memset(bnWood, 0, sizeof(bnWood));
+  bnWoodN = 0; bnFrontN = 0; bnLeafN = 0; bnLeafAlive = 0;
+  bnRecentI = 0;
+  memset(bnRecent, 0, sizeof(bnRecent));
+  for (int y = 100; y < 180; y++)                 // trunk: 1/3 screen, 6 wide
+    for (int x = 117; x < 123; x++) bnSetWood(x, y, 3);
+  bnLastLeaf = bnLastWood = bnLastTick = millis();
+  bnShakeStart = 0;
 }
 
 static void bnLoad() {
-  bnPrefs.begin("bonsai", false);
-  bnSeed = bnPrefs.getUInt("seed", 0);
-  if (bnSeed == 0) {
-    bnSeed = esp_random() | 1u;
-    bnPrefs.putUInt("seed", bnSeed);
-    // first look: start as a young tree, not a bare seed, so the shape is
-    // visible immediately; the rest of the two hours plays out live.
-    bnGrowMs = (uint32_t)((uint64_t)BN_FULL_MS * 50ULL / 100ULL);
-    bnPrefs.putUInt("grow", bnGrowMs);
-  } else {
-    bnGrowMs = bnPrefs.getUInt("grow", 0);
-  }
-  if (bnGrowMs > BN_FULL_MS) bnGrowMs = BN_FULL_MS;
-  bnGen();
-  bnLastTick = millis();
+  bnSeed = esp_random() | 1u;                     // a new tree each boot
+  bnPlant();
   bnReady = true;
 }
 
-// growth clock + leaf physics run in every mode, not just this one
+// growth clock runs in every mode, not just this one
 static void bnTick() {
   if (!bnReady) return;
   const unsigned long now = millis();
-  const unsigned long dt = now - bnLastTick;
-  bnLastTick = now;
-  if (bnGrowMs < BN_FULL_MS) {
-    bnGrowMs += (uint32_t)dt;
-    if (bnGrowMs > BN_FULL_MS) bnGrowMs = BN_FULL_MS;
+  const int target = bnLeafTarget();
+  if ((int)bnLeafAlive < target && now - bnLastLeaf >= BN_LEAF_MS) {
+    bnLastLeaf = now;
+    bnAddLeaf();
   }
-  if (now - bnLastSave >= 60000UL) {
-    bnLastSave = now;
-    bnPrefs.putUInt("grow", bnGrowMs);
-  }
-  for (int i = 0; i < BN_FALL; i++) {
-    if (!bnFall[i].live) continue;
-    bnFall[i].vy += 0.30f;
-    bnFall[i].x += bnFall[i].vx;
-    bnFall[i].y += bnFall[i].vy;
-    if (bnFall[i].y >= (float)BN_GRND) {
-      bnFall[i].live = 0;
-      if (bnRestN < BN_FALL) bnRest[bnRestN++] = (int16_t)bnFall[i].x;
+  if ((int)bnLeafAlive >= target) {
+    unsigned long interval = BN_WOOD_BASE * (unsigned long)(bnWoodN < 40 ? 40 : bnWoodN) / BN_SANITY;
+    if (interval < BN_WOOD_MIN) interval = BN_WOOD_MIN;
+    if (now - bnLastWood >= interval) {
+      bnLastWood = now;
+      if (bnRand() % 100 < 70) bnWoodStep();
+      else bnThicken();
     }
   }
-  if (bnRegrowPending && now >= bnRegrowAt) {
-    bnRegrowAt = now + BN_REGROW_MS;
-    for (int i = 0; i < bnNLeaf; i++) {
-      if (bnLeaf[i].kind == 0 && !bnLeaf[i].on) { bnLeaf[i].on = 1; bnRegrowPending--; break; }
-    }
-    if (bnRestN) bnRestN--;              // the tree reclaims a fallen leaf
-  }
+  if (bnWoodN > BN_WOOD_MAX) bnWoodN = BN_WOOD_MAX;
 }
 
 // button 3: shake the tree
 static void bnInteract() {
   if (!bnReady) return;
-  const unsigned long now = millis();
-  const int prog = bnProgress();
-  bnShakeStart = now;
-  int matured = 0, attached = 0;
-  for (int i = 0; i < bnNLeaf; i++) {
-    if (bnLeaf[i].kind != 0 || bnLeaf[i].t > prog) continue;
-    matured++;
-    if (bnLeaf[i].on) attached++;
-  }
-  if (matured < 6) return;               // sapling: it only sways
+  bnShakeStart = millis();
   int drop = 5 + (int)(bnRand() % 4);
-  const int floorN = matured * 30 / 100;
-  if (attached - drop < floorN) drop = attached - floorN;
+  if ((int)bnLeafAlive - drop < 1) drop = bnLeafAlive;
   int dropped = 0;
-  for (int i = 0; i < bnNLeaf && dropped < drop; i++) {
-    if (bnLeaf[i].kind != 0 || !bnLeaf[i].on || bnLeaf[i].t > prog) continue;
-    bnLeaf[i].on = 0;
-    for (int k = 0; k < BN_FALL; k++) {
-      if (bnFall[k].live) continue;
-      bnFall[k].live = 1;
-      bnFall[k].x = (float)bnLeaf[i].x;
-      bnFall[k].y = (float)bnLeaf[i].y;
-      bnFall[k].vx = (float)((int)(bnRand() % 3) - 1) * 0.6f;
-      bnFall[k].vy = 0.4f;
-      break;
-    }
+  for (int i = 0; i < bnLeafN && dropped < drop; i++) {
+    if (!bnLeaf[i].alive) continue;
+    if (bnRand() % 100 < 45) continue;            // scatter the picks
+    bnLeaf[i].alive = 0;
+    bnLeafAlive--;
     dropped++;
-  }
-  if (dropped) {
-    if (!bnRegrowPending) bnRegrowAt = now + BN_REGROW_MS;
-    int pend = (int)bnRegrowPending + dropped;
-    bnRegrowPending = (uint8_t)(pend > 200 ? 200 : pend);
   }
 }
 
@@ -394,48 +466,27 @@ static void bnPot() {
 static void bnRender() {
   lifeSpr.fillSprite(0);
   const unsigned long now = millis();
-  const int prog = bnProgress();
   int amp = 0;
   if (bnShakeStart) {
     const unsigned long el = now - bnShakeStart;
     if (el < BN_SHAKE_MS) amp = (int)((1.0f - (float)el / (float)BN_SHAKE_MS) * 5.0f);
   }
-  for (int i = 0; i < bnNSeg; i++) {
-    const BnSeg &g = bnSeg[i];
-    if (g.t > prog) continue;
+  for (int y = 0; y < BN_H; y++) {
     int ox = 0;
-    if (amp) ox = (int)(amp * sinf((float)(now - bnShakeStart) * 0.045f + (float)g.y0 * 0.09f));
-    const uint8_t col = (g.w >= 6) ? 11 : 12;
-    const int dx = g.x1 - g.x0, dy = g.y1 - g.y0;
-    if (abs(dx) >= abs(dy)) {
-      const int step = (dx >= 0) ? 2 : -2;
-      for (int x = g.x0; (step > 0) ? (x < g.x1) : (x > g.x1); x += step)
-        lifeSpr.fillRect(x + ox, g.y0 - g.w / 2, 2, g.w, col);
-    } else {
-      const int step = (dy >= 0) ? 2 : -2;
-      for (int y = g.y0; (step > 0) ? (y < g.y1) : (y > g.y1); y += step)
-        lifeSpr.fillRect(g.x0 + ox, y, g.w, 2, col);
+    if (amp) ox = (int)(amp * sinf((float)(now - bnShakeStart) * 0.045f + (float)y * 0.09f));
+    for (int x = 0; x < BN_W; x++) {
+      const uint8_t t = bnWood[y * BN_W + x];
+      if (!t) continue;
+      lifeSpr.fillRect(x + ox, y, 1, 1, (t >= 3) ? 11 : 12);
     }
   }
-  for (int i = 0; i < bnNLeaf; i++) {
-    const BnLeaf &l = bnLeaf[i];
-    if (l.t > prog || !l.on) continue;
-    int ox = 0;
-    if (amp) ox = (int)(amp * sinf((float)(now - bnShakeStart) * 0.045f + (float)l.y * 0.09f));
-    if (l.kind == 0) {
-      lifeSpr.fillRect(l.x + ox, l.y, 4, 3, 13);
-      lifeSpr.fillRect(l.x + 1 + ox, l.y - 2, 3, 2, 14);
-    } else {
-      lifeSpr.fillRect(l.x + ox, l.y, 2, 2, 2);       // flower, secondary
-      lifeSpr.fillRect(l.x + 1 + ox, l.y + 2, 1, 1, 14);
-    }
+  for (int i = 0; i < bnLeafN; i++) {
+    if (!bnLeaf[i].alive) continue;
+    const int ox = amp ? (int)(amp * sinf((float)(now - bnShakeStart) * 0.045f + (float)bnLeaf[i].y * 0.09f)) : 0;
+    const int x = bnLeaf[i].x + ox, y = bnLeaf[i].y;
+    lifeSpr.fillRect(x, y, 3, 2, 13);
+    lifeSpr.fillRect(x + 1, y - 2, 2, 2, 14);
   }
-  for (int i = 0; i < BN_FALL; i++) {
-    if (!bnFall[i].live) continue;
-    lifeSpr.fillRect((int)bnFall[i].x, (int)bnFall[i].y, 3, 2, 13);
-  }
-  for (int i = 0; i < bnRestN; i++)
-    lifeSpr.fillRect(bnRest[i], BN_GRND - 1, 3, 2, 13);
   bnPot();
   lifeSpr.pushSprite(0, 0);
 }
