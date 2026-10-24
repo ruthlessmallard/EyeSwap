@@ -61,12 +61,12 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_COIN, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_KNIGHT, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ, MODE_INDICATOR, MODE_PIPES };
+enum DisplayMode { MODE_SALVO, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_KNIGHT, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ, MODE_INDICATOR, MODE_PIPES };
 
 // Random Cycle: rotate the pod through the visual roster on a timer.
 #define CYCLE_MS 600000UL   // 10 minutes per animation
 static const DisplayMode CYCLE_MODES[] = {
-  MODE_COIN, MODE_STATIC, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_KNIGHT, MODE_PIPES,
+  MODE_SALVO, MODE_STATIC, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_KNIGHT, MODE_PIPES,
   MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ
 };
 #define CYCLE_N ((int)(sizeof(CYCLE_MODES) / sizeof(CYCLE_MODES[0])))
@@ -324,8 +324,8 @@ void fireInit();
 void updateFire();
 void knightInit();
 void updateKnight();
-void coinInit();
-void updateCoin();
+void salvoInit();
+void updateSalvo();
 void pipesInit();
 void updatePipes();
 void radarInit();
@@ -367,7 +367,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       // No TFT work here -- just record it; the loop task applies it.
       if (strcmp(anim, "marquee") == 0)          { mpTestOnePass = true; }   // indicator test, not a mode
       else if (strcmp(anim, "pipes") == 0)       { pendingMode = MODE_PIPES;       modeDirty = true; }
-      else if (strcmp(anim, "coin") == 0 || strcmp(anim, "dozer") == 0 || strcmp(anim, "coins") == 0) { pendingMode = MODE_COIN; modeDirty = true; }
+      else if (strcmp(anim, "salvo") == 0 || strcmp(anim, "artillery") == 0 || strcmp(anim, "cannon") == 0) { pendingMode = MODE_SALVO; modeDirty = true; }
       else if (strcmp(anim, "static") == 0)      { pendingMode = MODE_STATIC;      modeDirty = true; }
       else if (strcmp(anim, "now_playing") == 0) { pendingMode = MODE_NOW_PLAYING; modeDirty = true; }
       else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
@@ -718,8 +718,8 @@ void setDisplayMode(DisplayMode mode, bool remember) {
     tft.setTextColor(drawColor);
   } else if (mode == MODE_PIPES) {
     pipesInit();
-  } else if (mode == MODE_COIN) {
-    coinInit();
+  } else if (mode == MODE_SALVO) {
+    salvoInit();
   } else if (mode == MODE_STATIC) {
     lifeSeed();
   } else if (mode == MODE_BOIDS) {
@@ -1839,21 +1839,25 @@ void updateKnight() {
   krRender();
 }
 
-// ==== Coin Dozer (MODE_COIN): plate shoves a pile of blocky coins off the edge ====
+// ==== Coin Dozer: PARKED 2026-10-24 (Salvo took slot 0). Nothing deleted.
+// Flip #if 0 to #if 1 to bring it back; it needs its own enum value to run.
+#if 0
+// ==== Coin Dozer (MODE_SALVO): plate shoves a pile of blocky coins off the edge ====
 // Stacking is a 1D sandpile per column, not rigid-body collisions: a coin can
 // never sink into another, which is the failure the circle solver showed.
-#define CD_COLS      12
-#define CD_X0        24                  // left edge of the table
-#define CD_COL_W     16
-#define CD_CAP       6                   // coins a column stacks before it spills
-#define CD_FLOOR_Y   186                 // table surface
-#define CD_COIN_H    6
+#define CD_COLS      10
+#define CD_X0        20                  // left edge of the table
+#define CD_COL_W     20
+#define CD_CAP       4                   // coins a column stacks before it spills
+#define CD_FLOOR_Y   176                 // table surface
+#define CD_COIN_H    8
 #define CD_TICK      33                  // ~30 fps
-#define CD_STROKE_MS 22000UL             // slow forward shove
-#define CD_RETRACT_MS 2000UL
-#define CD_DROP_MIN  2200UL
+#define CD_STROKE_MS 4000UL              // shove pace: fast enough that coins transit
+#define CD_RETRACT_MS 1200UL
+#define CD_DROP_MIN  2600UL
 #define CD_DROP_MAX  4200UL
 #define CD_MAX_FALL  3
+#define CD_DROP_COL  2                   // never drop behind the plate
 
 static uint8_t  cdCol[CD_COLS];
 static int      cdScore = 0;
@@ -1926,7 +1930,7 @@ void coinInit() {
 
 static void cdDrop() {
   const int n = (random(100) < 60) ? 1 : ((random(100) < 75) ? 2 : 3);
-  const int col = random(CD_COLS);
+  const int col = CD_DROP_COL + random(CD_COLS - CD_DROP_COL);
   for (int k = 0; k < n; k++) {
     for (int s = 0; s < CD_MAX_FALL; s++) {
       if (cdFall[s].live) continue;
@@ -1940,23 +1944,24 @@ static void cdDrop() {
 }
 
 static void cdDrawCoin(int x, int y, uint8_t body, uint8_t rim) {
-  // Blocky disc: narrow top and bottom rows, wide middle.
-  lifeSpr.fillRect(x + 2, y,     10, 1, body);
-  lifeSpr.fillRect(x + 1, y + 1, 12, 1, body);
-  lifeSpr.fillRect(x,     y + 2, 14, 2, body);
-  lifeSpr.fillRect(x + 1, y + 4, 12, 1, body);
-  lifeSpr.fillRect(x + 2, y + 5, 10, 1, body);
-  lifeSpr.fillRect(x + 3, y + 1,  8, 1, rim);   // top face catches the light
+  // 18x8 blocky disc: stepped shoulders, flat face, 1 px gap to the next coin.
+  lifeSpr.fillRect(x + 4, y,     10, 1, body);
+  lifeSpr.fillRect(x + 2, y + 1, 14, 1, body);
+  lifeSpr.fillRect(x,     y + 2, 18, 3, body);
+  lifeSpr.fillRect(x + 2, y + 5, 14, 1, body);
+  lifeSpr.fillRect(x + 4, y + 6, 10, 1, body);
+  lifeSpr.fillRect(x + 5, y + 2,  8, 1, rim);   // top face catches the light
 }
 
 static void cdRender() {
   lifeSpr.fillSprite(0);
 
-  // table + the drop edge on the right
+  // table, plus the payout tray at the far edge
   lifeSpr.fillRect(CD_X0, CD_FLOOR_Y, CD_COLS * CD_COL_W, 2, 1);
-  lifeSpr.fillRect(CD_X0 + CD_COLS * CD_COL_W + 2, CD_FLOOR_Y, 2, 16, 2);
-  for (int x = CD_X0; x < CD_X0 + CD_COLS * CD_COL_W; x += 8)
-    lifeSpr.fillRect(x, CD_FLOOR_Y + 4, 3, 1, 1);
+  lifeSpr.fillRect(CD_X0 + CD_COLS * CD_COL_W + 2, CD_FLOOR_Y, 3, 16, 2);
+  lifeSpr.fillRect(CD_X0 + CD_COLS * CD_COL_W + 2, CD_FLOOR_Y + 14, 14, 2, 1);
+  for (int x = CD_X0; x < CD_X0 + CD_COLS * CD_COL_W; x += 10)
+    lifeSpr.fillRect(x, CD_FLOOR_Y + 4, 4, 1, 1);
 
   // the pile
   for (int c = 0; c < CD_COLS; c++) {
@@ -1972,13 +1977,13 @@ static void cdRender() {
     cdDrawCoin((int)cdFall[i].x, (int)cdFall[i].y, 2, 1);
   }
 
-  // plate: travels from retracted to full extension over the stroke
-  const int plateX = 16 + (int)(cdStroke * 58.0f);
-  lifeSpr.fillRect(plateX, CD_FLOOR_Y - 44, 10, 44, 2);
-  lifeSpr.fillRect(plateX + 2, CD_FLOOR_Y - 40, 6, 36, 1);
-  lifeSpr.fillRect(plateX, CD_FLOOR_Y - 6, 10, 6, 2);
+  // plate: a chunky block, not a thermometer
+  const int plateX = 12 + (int)(cdStroke * 42.0f);
+  lifeSpr.fillRect(plateX, CD_FLOOR_Y - 56, 20, 56, 2);
+  lifeSpr.fillRect(plateX + 3, CD_FLOOR_Y - 52, 14, 48, 1);
+  lifeSpr.fillRect(plateX, CD_FLOOR_Y - 9, 20, 9, 2);
 
-  blockNumber(cdScore, 58, 42, 3, cdScoreFlash ? 2 : 1);
+  blockNumber(cdScore, 58, 40, 3, cdScoreFlash ? 2 : 1);
 
   lifeSpr.pushSprite(0, 0);
   cdScoreFlash = false;
@@ -2026,6 +2031,301 @@ void updateCoin() {
   }
 
   cdRender();
+}
+
+#endif  // Coin Dozer
+
+// ==== Salvo (MODE_SALVO): WW1 artillery duel, camera parked at the receiving end ====
+// The gunner never sees velocity, wind or curve -- only where the last shell
+// planted its flag -- so each group of three brackets toward the target.
+#define SV_TICK         33
+#define SV_AIM_MS       1000UL
+#define SV_RECOIL_MS    240UL
+#define SV_CUT_MS       260UL
+#define SV_WAIT_MIN     1400UL
+#define SV_WAIT_MAX     2400UL
+#define SV_FALL_MS      520UL
+#define SV_IMPACT_MS    420UL
+#define SV_FLAG_MS      800UL
+#define SV_MATCH_MS     2600UL
+#define SV_WIN_KILLS    3
+#define SV_WIND         14.0f
+#define SV_CURVE        10.0f
+#define SV_SPREAD_MIN   18.0f
+#define SV_SPREAD_MAX   30.0f
+#define SV_HIT_R        7.0f
+#define SV_AIM_GAIN     0.75f
+#define SV_GUN_X        96
+#define SV_GROUND       178
+#define SV_FLAGS        5
+
+enum SvPhase : uint8_t { SV_AIM, SV_RECOIL, SV_CUT, SV_WAIT, SV_FALL, SV_IMPACT, SV_FLAG, SV_MATCH };
+
+static SvPhase svPhase = SV_AIM;
+static unsigned long svPhaseAt = 0, svLastTick = 0, svWaitUntil = 0;
+static uint8_t svShooter = 0;            // 0 = primary gun, 1 = secondary gun
+static uint8_t svShotsLeft = 3;
+static uint8_t svKills[2] = {0, 0};
+static float   svBias[2] = {0.0f, 0.0f};
+static float   svOffset = 0.0f;          // this shell's landing, px from the gun
+static float   svSpread = 26.0f;
+static bool    svHit = false;
+static bool    svWrecked[2] = {false, false};
+static int     svDistance = 420;
+static int     svLandX = 144;
+static int8_t  svFlagX[SV_FLAGS];
+static uint8_t svFlagSide[SV_FLAGS];
+static uint8_t svFlagN = 0;
+static uint8_t svWinner = 0;
+
+static uint8_t svInk(uint8_t side) { return side == 0 ? 1 : 2; }
+static uint8_t svOther(uint8_t side) { return side == 0 ? 2 : 1; }
+
+static void svSetPhase(SvPhase ph) { svPhase = ph; svPhaseAt = millis(); }
+
+static void svNewDistance() {
+  svDistance = 320 + (int)random(600);
+  const float t = (float)(svDistance - 320) / 600.0f;
+  svSpread = SV_SPREAD_MIN + (SV_SPREAD_MAX - SV_SPREAD_MIN) * t;
+}
+
+// --- art -------------------------------------------------------------------
+static void svFlag(int x, uint8_t side) {
+  const int g = SV_GROUND;
+  lifeSpr.fillRect(x, g - 20, 2, 20, svOther(side));
+  lifeSpr.fillRect(x + 2, g - 20, 10, 7, svInk(side));
+  lifeSpr.fillRect(x + 4, g - 18, 6, 2, 0);
+}
+
+static void svCannon(int x, uint8_t ink, uint8_t rim, bool faceRight, bool wreck, int recoil) {
+  const int g = SV_GROUND;
+  const int cx = x - recoil;
+  if (wreck) {
+    lifeSpr.fillRect(cx - 28, g - 9, 54, 9, ink);
+    lifeSpr.fillRect(cx - 12, g - 22, 20, 13, ink);
+    lifeSpr.fillRect(cx + 6, g - 30, 9, 9, rim);
+    lifeSpr.fillRect(cx - 22, g - 26, 7, 6, rim);
+    return;
+  }
+  lifeSpr.fillRect(cx - 30, g - 18, 18, 18, ink);      // wheels
+  lifeSpr.fillRect(cx - 27, g - 15, 12, 12, 0);
+  lifeSpr.fillRect(cx + 12, g - 18, 18, 18, ink);
+  lifeSpr.fillRect(cx + 15, g - 15, 12, 12, 0);
+  lifeSpr.fillRect(cx - 34, g - 10, 68, 6, ink);       // trail
+  lifeSpr.fillRect(cx - 18, g - 46, 36, 30, ink);      // shield
+  lifeSpr.fillRect(cx - 13, g - 41, 26, 5, rim);
+  lifeSpr.fillRect(cx - 13, g - 32, 26, 3, rim);
+  for (int i = 0; i < 5; i++) {                        // barrel, stepped to the grid
+    const int bx = faceRight ? (cx + 6 + i * 9) : (cx - 15 - i * 9);
+    lifeSpr.fillRect(bx, g - 50 - i * 7, 9, 7, ink);
+  }
+}
+
+static void svHud() {
+  blockNumber(svKills[0], 62, 28, 2, 1);               // match score
+  blockNumber(svKills[1], 158, 28, 2, 2);
+  lifeSpr.fillRect(112, 34, 10, 2, 1);
+  if (svPhase == SV_MATCH) return;
+
+  blockNumber(svDistance, 50, 190, 2, 1);              // range in metres
+  const bool atShooter = (svPhase == SV_AIM || svPhase == SV_RECOIL);
+  const int ax = atShooter ? 116 : 136;
+  const int dir = atShooter ? 1 : -1;
+  for (int i = 0; i < 3; i++)                          // arrow to the enemy
+    lifeSpr.fillRect(ax + dir * i * 5, 193 - i * 2, 5, 3 + i * 3, 2);
+  for (int i = 0; i < svShotsLeft; i++)                // rounds left this group
+    lifeSpr.fillRect(162 + i * 8, 191, 5, 5, svInk(svShooter));
+}
+
+static void svRender() {
+  lifeSpr.fillSprite(0);
+  if (svPhase == SV_CUT) { lifeSpr.pushSprite(0, 0); return; }
+
+  const int g = SV_GROUND;
+  lifeSpr.fillRect(18, g, 204, 2, 1);
+  for (int x = 24; x < 214; x += 14) lifeSpr.fillRect(x, g + 4, 5, 1, 1);
+
+  if (svPhase == SV_MATCH) {
+    const uint8_t ink = svInk(svWinner);
+    lifeSpr.fillRect(38, 92, 164, 52, 0);
+    lifeSpr.fillRect(38, 92, 164, 2, ink);
+    lifeSpr.fillRect(38, 142, 164, 2, ink);
+    for (int i = 0; i < 3; i++) {                      // three flags = the winning kills
+      const int x = 72 + i * 36;
+      lifeSpr.fillRect(x, 104, 2, 20, ink);
+      lifeSpr.fillRect(x + 2, 104, 14, 8, ink);
+      lifeSpr.fillRect(x + 4, 106, 8, 3, 0);
+    }
+    svHud();
+    lifeSpr.pushSprite(0, 0);
+    return;
+  }
+
+  for (int i = 0; i < svFlagN; i++) svFlag(svFlagX[i], svFlagSide[i]);
+
+  const bool atShooter = (svPhase == SV_AIM || svPhase == SV_RECOIL);
+  const uint8_t gunSide = atShooter ? svShooter : (uint8_t)(1 - svShooter);
+  const uint8_t ink = svInk(gunSide);
+  const uint8_t rim = svOther(gunSide);
+  const int gunX = atShooter ? SV_GUN_X : (240 - SV_GUN_X);
+
+  svCannon(gunX, ink, rim, atShooter, !atShooter && svWrecked[gunSide],
+           (svPhase == SV_RECOIL) ? 12 : 0);
+
+  if (svPhase == SV_RECOIL) {                          // muzzle flash at the barrel tip
+    const int mx = atShooter ? gunX + 44 : gunX - 58;
+    const int my = g - 84;
+    lifeSpr.fillRect(mx, my, 12, 9, rim);
+    lifeSpr.fillRect(mx + 3, my - 5, 6, 6, rim);
+    lifeSpr.fillRect(mx - 5, my + 7, 7, 5, rim);
+  }
+
+  if (svPhase == SV_FALL) {                            // the last half second of the shell
+    const float t = (float)(millis() - svPhaseAt) / (float)SV_FALL_MS;
+    const int sx = svLandX - (int)((1.0f - t) * 26.0f);
+    const int sy = 4 + (int)(t * (float)(g - 10));
+    lifeSpr.fillRect(sx, sy, 4, 10, rim);
+    lifeSpr.fillRect(sx - 1, sy + 3, 6, 5, rim);
+  }
+
+  if (svPhase == SV_IMPACT) {                          // burst, not a fireball
+    const int k = (int)((millis() - svPhaseAt) / 55);
+    const int x = svLandX, y = g - 6;
+    lifeSpr.fillRect(x - 6 - k, y - 4, 4, 4, rim);
+    lifeSpr.fillRect(x + 4 + k, y - 6, 4, 4, rim);
+    lifeSpr.fillRect(x - 2, y - 12 - k, 4, 4, rim);
+    lifeSpr.fillRect(x, y - 2, 6, 6, ink);
+  }
+
+  svHud();
+  lifeSpr.pushSprite(0, 0);
+}
+
+// --- state machine ---------------------------------------------------------
+void salvoInit() {
+  randomSeed(esp_random());
+  svKills[0] = svKills[1] = 0;
+  svBias[0] = svBias[1] = 0.0f;
+  svWrecked[0] = svWrecked[1] = false;
+  svFlagN = 0;
+  svShotsLeft = 3;
+  svShooter = (uint8_t)random(2);
+  svWinner = 0;
+  svOffset = 0.0f;
+  svHit = false;
+  svLastTick = millis();
+  svNewDistance();
+  lifeSpr.fillSprite(0);
+  svSetPhase(SV_AIM);
+  svRender();
+}
+
+static void svFire() {
+  // hidden velocity/wind/curve, plus the gunner's own ranging error and its
+  // accumulated correction from the last flag it saw.
+  svOffset = svBias[svShooter]
+           + ((float)random((int)(-svSpread * 10.0f), (int)(svSpread * 10.0f) + 1) / 10.0f)
+           + ((float)random((int)(-SV_WIND * 10.0f), (int)(SV_WIND * 10.0f) + 1) / 10.0f)
+           + ((float)random((int)(-SV_CURVE * 10.0f), (int)(SV_CURVE * 10.0f) + 1) / 10.0f);
+  svHit = fabsf(svOffset) <= SV_HIT_R;
+  svLandX = (240 - SV_GUN_X) + (int)svOffset;
+  if (svLandX < 26) svLandX = 26;
+  if (svLandX > 208) svLandX = 208;
+}
+
+void updateSalvo() {
+  const unsigned long now = millis();
+  if (now - svLastTick < SV_TICK) return;
+  svLastTick = now;
+
+  switch (svPhase) {
+    case SV_AIM:
+      if (now - svPhaseAt >= SV_AIM_MS) { svFire(); svSetPhase(SV_RECOIL); }
+      break;
+
+    case SV_RECOIL:
+      if (now - svPhaseAt >= SV_RECOIL_MS) svSetPhase(SV_CUT);
+      break;
+
+    case SV_CUT:
+      if (now - svPhaseAt >= SV_CUT_MS) {
+        svWaitUntil = now + SV_WAIT_MIN + random(SV_WAIT_MAX - SV_WAIT_MIN);
+        svSetPhase(SV_WAIT);
+      }
+      break;
+
+    case SV_WAIT:
+      if (now >= svWaitUntil) svSetPhase(SV_FALL);
+      break;
+
+    case SV_FALL:
+      if (now - svPhaseAt >= SV_FALL_MS) svSetPhase(SV_IMPACT);
+      break;
+
+    case SV_IMPACT:
+      if (now - svPhaseAt >= SV_IMPACT_MS) {
+        if (svHit) {
+          svKills[svShooter]++;
+          svWrecked[1 - svShooter] = true;
+          svBias[svShooter] = 0.0f;
+        } else {
+          svBias[svShooter] -= svOffset * SV_AIM_GAIN;      // bracket from the flag
+          if (svFlagN >= SV_FLAGS) {                        // drop the oldest flag
+            for (int i = 1; i < SV_FLAGS; i++) {
+              svFlagX[i - 1] = svFlagX[i];
+              svFlagSide[i - 1] = svFlagSide[i];
+            }
+            svFlagN = SV_FLAGS - 1;
+          }
+          svFlagX[svFlagN] = (int8_t)(svLandX - 120);
+          svFlagSide[svFlagN] = svShooter;
+          svFlagN++;
+        }
+        svSetPhase(SV_FLAG);
+      }
+      break;
+
+    case SV_FLAG:
+      if (now - svPhaseAt >= SV_FLAG_MS) {
+        if (svHit && svKills[svShooter] >= SV_WIN_KILLS) {
+          svWinner = svShooter;
+          svSetPhase(SV_MATCH);
+        } else if (svHit) {
+          svWrecked[0] = svWrecked[1] = false;
+          svBias[0] = svBias[1] = 0.0f;
+          svFlagN = 0;
+          svShotsLeft = 3;
+          svShooter = (uint8_t)(1 - svShooter);
+          svNewDistance();
+          svSetPhase(SV_AIM);
+        } else {
+          svShotsLeft--;
+          if (svShotsLeft == 0) {
+            svShotsLeft = 3;
+            svBias[svShooter] = 0.0f;       // fresh group, fresh bracket
+            svShooter = (uint8_t)(1 - svShooter);
+          }
+          svSetPhase(SV_AIM);
+        }
+      }
+      break;
+
+    case SV_MATCH:
+      if (now - svPhaseAt >= SV_MATCH_MS) {
+        svKills[0] = svKills[1] = 0;
+        svWinner = 0;
+        svWrecked[0] = svWrecked[1] = false;
+        svBias[0] = svBias[1] = 0.0f;
+        svFlagN = 0;
+        svShotsLeft = 3;
+        svShooter = (uint8_t)random(2);
+        svNewDistance();
+        svSetPhase(SV_AIM);
+      }
+      break;
+  }
+
+  svRender();
 }
 
 // ==== Pet (MODE_RADAR) ====
@@ -2847,7 +3147,7 @@ void updateEye() {
 void renderDisplay() {
   switch (activeMode) {
     case MODE_INDICATOR:   updateMarquee(); break;
-    case MODE_COIN:        updateCoin(); break;
+    case MODE_SALVO:       updateSalvo(); break;
     case MODE_PIPES:       updatePipes(); break;
     case MODE_STATIC:      updateLife(); break;
     case MODE_NOW_PLAYING: updateNowPlaying(); break;

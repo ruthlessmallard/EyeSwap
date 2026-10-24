@@ -84,7 +84,7 @@ connect.
 
 | # | Mode | What it does |
 |---|------|--------------|
-| 0 | **Coin Dozer** | Blocky coins drop in ones, twos and threes; a slow plate shoves the pile off the edge |
+| 0 | **Salvo** | WW1 artillery duel — 3-round groups bracket the target, camera stays at the receiving end |
 | 1 | **Game of Life** | Conway's Game of Life, 120×120 torus, reseeds when it dies/freezes |
 | 2 | **Now Playing** | PLAYING/PAUSED + title + artist card |
 | 3 | **Boids** | Flocking sim — "little fish" 🐟 |
@@ -102,7 +102,7 @@ connect.
 **Two-tone color:** every animation uses a **primary** and an **accent** color.
 The accent highlights the element that should pop — the white-hot core of the
 fire, every fifth boid, the ant itself, pipe joints/end caps, the radar sweep
-creature's eyes, crystal rim, the snake's head + pellet, rally paddles + ball, the eyeball's iris, the knight's plume + blade, the runner's high score, the dozer plate + coin rims, and
+creature's eyes, crystal rim, the snake's head + pellet, rally paddles + ball, the eyeball's iris, the knight's plume + blade, the runner's high score, the incoming shells and impact bursts, and
 the EQ peak-hold caps. Set **Accent = primary** (or hit **Match primary**) for
 a single-color look. Both colors ride in the config packet and persist in NVS.
 
@@ -210,7 +210,7 @@ BLE UUIDs (must match the Flutter app exactly):
 {"type":"config","brightness_offset":0,"bg_color":"#FFAA00","accent_color":"#0066FF"}
 
 // App → ESP32 animation mode
-//   coin | static | now_playing | boids | ant | fire | knight | pipes |
+//   salvo | static | now_playing | boids | ant | fire | knight | pipes |
 //   pet | crystal | snake | rally | eye | cycle
 //   (legacy aliases still accepted: radar, starfield, oscilloscope, pong, eq)
 //   ("marquee" is accepted but only runs one indicator pass; it is not a mode)

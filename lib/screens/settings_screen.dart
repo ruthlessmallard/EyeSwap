@@ -39,7 +39,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _idleAnimation = 'static'; // firmware ids; marquee is a link indicator, not a mode
   
   final List<Map<String, dynamic>> _idleAnimations = [
-    {'id': 'coin', 'name': 'Coin Dozer', 'icon': Icons.monetization_on},
+    {'id': 'salvo', 'name': 'Salvo', 'icon': Icons.flag},
     {'id': 'static', 'name': 'Game of Life', 'icon': Icons.grain},
     {'id': 'now_playing', 'name': 'Now Playing', 'icon': Icons.music_note},
     {'id': 'boids', 'name': 'Boids', 'icon': Icons.flight},
