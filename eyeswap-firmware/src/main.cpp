@@ -1034,6 +1034,15 @@ static inline int waveYAt(int x) {
                        + 0.9f * sinf(x * 0.41f - wavePhase * 0.7f));
 }
 
+// button 3 drops a live blob in the middle of the dish
+static void lifeInteract() {
+  const int cx = LIFE_W / 2, cy = LIFE_H / 2;
+  for (int dy = -2; dy <= 2; dy++)
+    for (int dx = -2; dx <= 2; dx++)
+      if (random(100) < 55)
+        lifeSet(lifeCur, (cx + dx + LIFE_W) % LIFE_W, (cy + dy + LIFE_H) % LIFE_H, 1);
+}
+
 void updateBoids() {
   unsigned long now = millis();
   if (now - lastBoidUpdate < 50) return;
@@ -1632,6 +1641,17 @@ static int krScore = 0, krHi = 0;
 static float krSpawnGap = 150.0f;
 static uint8_t krRunPhase = 0, krRunTick = 0;
 static unsigned long krLastTick = 0, krStartAt = 0, krDeadUntil = 0, krScoreAcc = 0;
+static unsigned long krPlayerUntil = 0;  // button 3 owns the jumps until this expires
+static uint8_t krPlayerCrashes = 0;      // hand it back to the AI after a few spills
+
+// button 3: jump, and take the reins for a minute
+static void krInteract() {
+  if (krDead) return;
+  const unsigned long now = millis();
+  krPlayerUntil = now + 60000UL;
+  krPlayerCrashes = 0;
+  if (!krAir) { krAir = true; krVel = KR_JUMP_V; }
+}
 
 // 3x5 blocky digits: no font dependency, and it matches the pixel grid.
 static const uint8_t KR_GLYPH[10][5] = {
@@ -1806,7 +1826,9 @@ void updateKnight() {
   }
 
   // ---- AI: hop ground obstacles, never hop at an arrow ----
-  if (!krAir) {
+  // While the button has the reins the AI keeps its hands off. Neglect hands
+  // control back: either the minute runs out or three spills settle it.
+  if (!krAir && now >= krPlayerUntil) {
     const float lead = krSpeed * (KR_REACT + ((float)random(-(int)(KR_REACT_JIT * 10.0f), (int)(KR_REACT_JIT * 10.0f) + 1) / 10.0f)) + 2.0f;
     for (int i = 0; i < KR_MAX_OBS; i++) {
       if (!krObs[i].live || krObs[i].kind == KR_ARROW) continue;
@@ -1829,6 +1851,7 @@ void updateKnight() {
       krDead = true;
       krDeadUntil = now + 1200UL;
       if (krScore > krHi) krHi = krScore;
+      if (now < krPlayerUntil && ++krPlayerCrashes >= 3) krPlayerUntil = 0;
       break;
     }
   }
@@ -2078,6 +2101,7 @@ static uint8_t svFlagSide[SV_FLAGS];
 static uint8_t svFlagN = 0;
 static uint8_t svWinner = 0;
 static bool    svFlagFresh = false;     // newest flag belongs to the shot in flight
+static bool    svTapFire = false;       // button 3 wants the next round now
 
 static uint8_t svInk(uint8_t side) { return side == 0 ? 1 : 2; }
 static uint8_t svOther(uint8_t side) { return side == 0 ? 2 : 1; }
@@ -2253,11 +2277,17 @@ void salvoInit() {
   svWinner = 0;
   svOffset = 0.0f;
   svHit = false;
+  svTapFire = false;
   svLastTick = millis();
   svNewDistance();
   lifeSpr.fillSprite(0);
   svSetPhase(SV_AIM);
   svRender();
+}
+
+// button 3: skip the lull and fire
+static void svInteract() {
+  if (svPhase == SV_AIM || svPhase == SV_WAIT) svTapFire = true;
 }
 
 static void svFire() {
@@ -2280,7 +2310,8 @@ void updateSalvo() {
 
   switch (svPhase) {
     case SV_AIM:
-      if (now - svPhaseAt >= SV_AIM_MS) { svFire(); svSetPhase(SV_RECOIL); }
+      if (svTapFire) { svTapFire = false; svFire(); svSetPhase(SV_RECOIL); }
+      else if (now - svPhaseAt >= SV_AIM_MS) { svFire(); svSetPhase(SV_RECOIL); }
       break;
 
     case SV_RECOIL:
@@ -2295,7 +2326,8 @@ void updateSalvo() {
       break;
 
     case SV_WAIT:
-      if (now >= svWaitUntil) svSetPhase(SV_FALL);
+      if (svTapFire) { svTapFire = false; svSetPhase(SV_FALL); }
+      else if (now >= svWaitUntil) svSetPhase(SV_FALL);
       break;
 
     case SV_FALL:
@@ -3258,6 +3290,35 @@ void setupBLE() {
 }
 
 // ==========================================
+// Button 3 short-press: one interaction, chosen by whatever is on screen.
+// Priority for the pet is poop > feed > play; other modes define their own.
+static void tamaInteract() {
+  const unsigned long now = millis();
+  if (tSleeping) { tSleeping = false; tSleepUntil = 0; }
+  if (tPoops > 0) {
+    tPoops--;
+    tPoopClearAt = (tPoops > 0) ? now + 6000UL : 0;
+    if (tHappy < 100) tHappy += 4;
+  } else if (tHunger < 90) {
+    tEatUntil = now + 2600UL;
+  } else {
+    tPlayUntil = now + 2400UL;
+    tHappy = (tHappy > 84) ? 100 : (uint8_t)(tHappy + 16);
+    if (tEnergy > 8) tEnergy -= 4;
+  }
+  tamaSave();
+}
+
+static void modeInteract() {
+  switch (activeMode) {
+    case MODE_RADAR:  tamaInteract(); break;
+    case MODE_STATIC: lifeInteract(); break;
+    case MODE_KNIGHT: krInteract();   break;
+    case MODE_SALVO:  svInteract();   break;
+    default: break;                   // Fire, Lissajous, DLA, Rally: display only
+  }
+}
+
 void handleButtons() {
   unsigned long now = millis();
 
@@ -3272,6 +3333,7 @@ void handleButtons() {
     }
     else if (b.pressed && !raw) {
       if (!b.longPressSent) {
+        if (i == 2) modeInteract();     // short press interacts; long press stays Gemini
         sendButtonCommand(i+1, false);
       }
       b.pressed = false;
