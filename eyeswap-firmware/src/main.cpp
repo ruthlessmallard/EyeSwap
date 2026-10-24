@@ -199,9 +199,19 @@ static unsigned long lastAntUpdate = 0;
 #define BN_H          240
 #define BN_GRND       180
 #define BN_SANITY     4           // wood pixels per leaf
+#define BN_FAST_TEST  1           // TEMPORARY bench speed: 1 line back to real pacing
+#if BN_FAST_TEST
+#define BN_LEAF_MS    30UL
+#define BN_WOOD_BASE  1UL
+#define BN_WOOD_MIN   20UL
+#define BN_REPLANT_MS 240000UL    // fresh tree every 4 min while fast
+#else
 #define BN_LEAF_MS    800UL       // one leaf per beat until the canopy is even
 #define BN_WOOD_BASE  480UL       // pacing constant for the size term
 #define BN_WOOD_MIN   2000UL
+#endif
+#define BN_BOLE_Y     (BN_GRND - 30)   // bare bole: no leaves, no wood below this
+#define BN_LEAF_PER_WOOD 2             // leaves a leaf-bearing wood pixel supports
 #define BN_WOOD_MAX   1400
 #define BN_SHAKE_MS   1200UL
 #define BN_THIN_MAX   60          // 1-px branches: quarter of the screen
@@ -213,6 +223,7 @@ struct BnLf { int16_t x, y; uint8_t alive; };
 
 static uint8_t  bnWood[BN_W * BN_H];          // tier per pixel, 0 = empty
 static uint16_t bnWoodN = 0;
+static uint16_t bnLeafWood = 0;               // wood that may host leaves
 static uint32_t bnSeed = 0x9E3779B9u;
 static BnLf     bnLeaf[BN_LEAF_MAX];
 static uint16_t bnLeafN = 0;
@@ -222,6 +233,7 @@ static uint16_t bnFrontN = 0;
 static uint16_t bnRecent[BN_DIEBACK];         // newest wood, for dieback
 static uint8_t  bnRecentI = 0;
 static unsigned long bnLastLeaf = 0, bnLastWood = 0, bnShakeStart = 0, bnLastTick = 0;
+static unsigned long bnPlantAt = 0;
 static bool bnReady = false;
 
 static uint32_t bnRand() {
@@ -244,6 +256,7 @@ static void bnSetWood(int x, int y, uint8_t t) {
   if (bnWood[y * BN_W + x]) return;
   bnWood[y * BN_W + x] = t;
   bnWoodN++;
+  if (t <= 2 && y < BN_BOLE_Y) bnLeafWood++;   // thin, above the bole: leaf-bearing
   bnRecent[bnRecentI] = (uint16_t)(y * BN_W + x);
   bnRecentI = (uint8_t)((bnRecentI + 1) % BN_DIEBACK);
   bnFrontPush(x, y);
@@ -295,8 +308,10 @@ static void bnDieback() {
     const uint16_t idx = bnRecent[(bnRecentI + BN_DIEBACK - 1 - i) % BN_DIEBACK];
     if (!bnWood[idx]) continue;
     const int x = idx % BN_W, y = idx / BN_W;
+    const uint8_t t = bnWood[idx];
     bnWood[idx] = 0;
     if (bnWoodN) bnWoodN--;
+    if (t <= 2 && y < BN_BOLE_Y && bnLeafWood) bnLeafWood--;
     bnDropLeavesNear(x, y);
   }
 }
@@ -307,12 +322,16 @@ static bool bnNearEdgeOrPot(int x, int y) {
   return false;
 }
 
-// pick a wood pixel that still has somewhere to grow
-static bool bnPickFront(int* rx, int* ry) {
-  for (int tries = 0; tries < 90 && bnFrontN; tries++) {
+// pick a wood pixel that still has somewhere to grow, inside a tier band and
+// above the bare bole line. Nothing grows or carries leaves in the no-leaf zone.
+static bool bnPickFrontIn(int loT, int hiT, int* rx, int* ry) {
+  for (int tries = 0; tries < 160 && bnFrontN; tries++) {
     const uint16_t idx = bnFront[bnRand() % bnFrontN];
     const int x = idx % BN_W, y = idx / BN_W;
-    if (!bnWood[idx]) continue;
+    const uint8_t t = bnWood[idx];
+    if (!t) continue;
+    if (y >= BN_BOLE_Y) continue;             // no-growth zone
+    if (t < loT || t > hiT) continue;
     if (!bnAt(x - 1, y) || !bnAt(x + 1, y) || !bnAt(x, y - 1) || !bnAt(x, y + 1)) {
       *rx = x; *ry = y;
       return true;
@@ -328,6 +347,7 @@ static void bnThicken() {
     const int cx = idx % BN_W, cy = idx / BN_W;
     const uint8_t t = bnWood[idx];
     if (t < 2) continue;
+    if (cy >= BN_BOLE_Y) continue;            // no-growth zone
     for (int k = 0; k < 4; k++) {
       const int nx = cx + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
       const int ny = cy + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
@@ -349,13 +369,14 @@ static void bnWoodStep() {
   // release the walker just off the growth front, or it would wander the
   // empty canopy for hours and never touch wood
   int bx = 0, by = 0;
-  if (!bnPickFront(&bx, &by)) return;
+  if (!bnPickFrontIn(1, 3, &bx, &by)) return;
   const float ang = (float)(bnRand() % 360) * 0.0174533f;
   const int rad = 7 + (int)(bnRand() % 9);
   int wx = bx + (int)lroundf(cosf(ang) * (float)rad);
   int wy = by + (int)lroundf(sinf(ang) * (float)rad);
   if (bnAt(wx, wy)) return;
   for (int step = 0; step < 900; step++) {
+    if (wy >= BN_BOLE_Y) return;              // drifted into the no-growth zone
     for (int k = 0; k < 4; k++) {
       const int nx = wx + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
       const int ny = wy + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
@@ -378,7 +399,7 @@ static void bnWoodStep() {
 
 static void bnAddLeaf() {
   int x = 0, y = 0;
-  if (!bnPickFront(&x, &y)) return;
+  if (!bnPickFrontIn(1, 2, &x, &y)) return;   // tier 3 is bole/limb: stays bare
   for (int k = 0; k < 4; k++) {
     const int nx = x + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
     const int ny = y + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
@@ -394,7 +415,7 @@ static void bnAddLeaf() {
 }
 
 static int bnLeafTarget() {
-  int t = (int)(bnWoodN / BN_SANITY);
+  int t = (int)(bnLeafWood / BN_LEAF_PER_WOOD);
   return (t > BN_LEAF_MAX) ? BN_LEAF_MAX : t;
 }
 
@@ -405,7 +426,7 @@ static float   bnTa[BN_TRUNK_LEN];
 
 static void bnPlant() {
   memset(bnWood, 0, sizeof(bnWood));
-  bnWoodN = 0; bnFrontN = 0; bnLeafN = 0; bnLeafAlive = 0;
+  bnWoodN = 0; bnLeafWood = 0; bnFrontN = 0; bnLeafN = 0; bnLeafAlive = 0;
   bnRecentI = 0;
   memset(bnRecent, 0, sizeof(bnRecent));
 
@@ -453,6 +474,7 @@ static void bnPlant() {
   bnRecentI = 0;
   memset(bnRecent, 0, sizeof(bnRecent));
   bnLastLeaf = bnLastWood = bnLastTick = millis();
+  bnPlantAt = millis();
   bnShakeStart = 0;
 }
 
@@ -466,6 +488,9 @@ static void bnLoad() {
 static void bnTick() {
   if (!bnReady) return;
   const unsigned long now = millis();
+#if BN_FAST_TEST
+  if (now - bnPlantAt >= BN_REPLANT_MS) { bnPlant(); return; }
+#endif
   const int target = bnLeafTarget();
   if ((int)bnLeafAlive < target && now - bnLastLeaf >= BN_LEAF_MS) {
     bnLastLeaf = now;
