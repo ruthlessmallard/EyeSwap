@@ -398,13 +398,60 @@ static int bnLeafTarget() {
   return (t > BN_LEAF_MAX) ? BN_LEAF_MAX : t;
 }
 
+#define BN_TRUNK_LEN  80
+
+static int16_t bnTx[BN_TRUNK_LEN], bnTy[BN_TRUNK_LEN];
+static float   bnTa[BN_TRUNK_LEN];
+
 static void bnPlant() {
   memset(bnWood, 0, sizeof(bnWood));
   bnWoodN = 0; bnFrontN = 0; bnLeafN = 0; bnLeafAlive = 0;
   bnRecentI = 0;
   memset(bnRecent, 0, sizeof(bnRecent));
-  for (int y = 100; y < 180; y++)                 // trunk: 1/3 screen, 6 wide
-    for (int x = 117; x < 123; x++) bnSetWood(x, y, 3);
+
+  // Trunk: 1/3 screen tall off a centered base, 6 px at the root tapering to
+  // 4 at the crown. Never a straight pole -- it starts leaning somewhere in
+  // the +/-45 deg cone and keeps drifting inside it.
+  int px = 120, py = BN_GRND - 1;
+  float ang = ((float)(bnRand() % 91) - 45.0f) * 0.0174533f;
+  for (int s = 0; s < BN_TRUNK_LEN; s++) {
+    const float c = cosf(ang), sn = sinf(ang);
+    const int w = (s < BN_TRUNK_LEN / 3) ? 6 : (s < 2 * BN_TRUNK_LEN / 3 ? 5 : 4);
+    for (int k = -(w / 2); k <= w / 2; k++)
+      bnSetWood(px + (int)lroundf(c * (float)k), py + (int)lroundf(sn * (float)k), 3);
+    bnTx[s] = (int16_t)px; bnTy[s] = (int16_t)py; bnTa[s] = ang;
+    px += (int)lroundf(sn);
+    py -= (int)lroundf(c);
+    ang += ((float)(bnRand() % 101) - 50.0f) * 0.0024f;   // slow drift
+    if (ang >  0.785f) ang =  0.785f;
+    if (ang < -0.785f) ang = -0.785f;
+  }
+
+  // One free branch. Planted, not earned: it skips the quarter-screen twig
+  // cap and it is not in the dieback ring, so the sapling has structure
+  // right away instead of being a leaf-covered stick.
+  const int bbase = BN_TRUNK_LEN * 58 / 100;
+  float ba = bnTa[bbase] + ((bnRand() & 1u) ? 1.15f : -1.15f);
+  if (ba >  1.36f) ba =  1.36f;                  // still rising, not drooping
+  if (ba < -1.36f) ba = -1.36f;
+  int bx = bnTx[bbase], by = bnTy[bbase];
+  const int blen = 46 + (int)(bnRand() % 20);
+  for (int s = 0; s < blen; s++) {
+    const float c = cosf(ba), sn = sinf(ba);
+    const int w = (s < blen / 2) ? 3 : 2;
+    for (int k = -(w / 2); k <= w / 2; k++)
+      bnSetWood(bx + (int)lroundf(c * (float)k), by + (int)lroundf(sn * (float)k), 3);
+    bx += (int)lroundf(sn);
+    by -= (int)lroundf(c);
+    if (bx < 8 || bx > BN_W - 9 || by < 8) break;      // keep it on screen
+    ba += ((float)(bnRand() % 101) - 50.0f) * 0.0016f;
+    if (ba >  1.36f) ba =  1.36f;
+    if (ba < -1.36f) ba = -1.36f;
+  }
+
+  // planted wood must never be eaten by a dieback of grown wood
+  bnRecentI = 0;
+  memset(bnRecent, 0, sizeof(bnRecent));
   bnLastLeaf = bnLastWood = bnLastTick = millis();
   bnShakeStart = 0;
 }
@@ -458,6 +505,11 @@ static void bnPot() {
   for (int y = 192; y < 218; y++) {               // tray tapers in
     const int x0 = 58 + (y - 192) / 3, x1 = 182 - (y - 192) / 3;
     lifeSpr.fillRect(x0, y, x1 - x0, 1, 1);
+  }
+  lifeSpr.fillRect(50, 186, 140, 1, 2);           // rim trim, secondary
+  for (int y = 202; y < 205; y++) {               // band, secondary
+    const int x0 = 58 + (y - 192) / 3, x1 = 182 - (y - 192) / 3;
+    lifeSpr.fillRect(x0 + 3, y, x1 - x0 - 6, 1, 2);
   }
   lifeSpr.fillRect(66, 218, 18, 5, 1);            // feet
   lifeSpr.fillRect(156, 218, 18, 5, 1);
