@@ -61,12 +61,12 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_SALVO, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_KNIGHT, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ, MODE_INDICATOR, MODE_PIPES };
+enum DisplayMode { MODE_SALVO, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_BONSAI, MODE_FIRE, MODE_KNIGHT, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ, MODE_INDICATOR, MODE_PIPES };
 
 // Random Cycle: rotate the pod through the visual roster on a timer.
 #define CYCLE_MS 600000UL   // 10 minutes per animation
 static const DisplayMode CYCLE_MODES[] = {
-  MODE_SALVO, MODE_STATIC, MODE_BOIDS, MODE_ANT, MODE_FIRE, MODE_KNIGHT, MODE_PIPES,
+  MODE_SALVO, MODE_STATIC, MODE_BOIDS, MODE_BONSAI, MODE_FIRE, MODE_KNIGHT, MODE_PIPES,
   MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ
 };
 #define CYCLE_N ((int)(sizeof(CYCLE_MODES) / sizeof(CYCLE_MODES[0])))
@@ -183,11 +183,277 @@ struct Splash { float x; int t; };
 static Splash splashes[SPLASH_MAX];
 static float wavePhase = 0.0f;   // scrolling surface phase
 
-// ==== Langton's ant (MODE_ANT): two-colour highway-builder on the torus ====
+// ==== Langton's ant: PARKED 2026-10-24 (Bonsai took the slot). Nothing deleted.
+#if 0
 #define ANT_BYTES ((LIFE_W * LIFE_H + 7) / 8)
 static uint8_t antGrid[ANT_BYTES];       // classic binary turn state
 static int antX, antY, antDir;   // dir: 0=N 1=E 2=S 3=W
 static unsigned long lastAntUpdate = 0;
+#endif
+
+// ==== Bonsai (MODE_BONSAI): a slow, persistent tree ====
+// Grows in real time whether or not it is on screen. The structure is
+// deterministic from a seed, so NVS only keeps the seed and elapsed growth.
+// Pot takes the primary colour, flowers the secondary; wood and foliage stay
+// natural on purpose -- the tree should look like a tree, not like the theme.
+#define BN_FULL_MS    7200000UL        // two hours from sprout to full canopy
+#define BN_GRND       180              // soil line
+#define BN_SEGS       150
+#define BN_LEAVES     250
+#define BN_FALL       10
+#define BN_SHAKE_MS   1200UL
+#define BN_REGROW_MS  5000UL
+
+struct BnSeg  { int16_t x0, y0, x1, y1; uint8_t w; uint16_t t; };
+struct BnLeaf { int16_t x, y; uint16_t t; uint8_t kind; uint8_t on; };  // kind 0 leaf, 1 flower
+struct BnFall { float x, y, vx, vy; uint8_t live; };
+
+static BnSeg  bnSeg[BN_SEGS];
+static BnLeaf bnLeaf[BN_LEAVES];
+static BnFall bnFall[BN_FALL];
+static int16_t bnRest[BN_FALL];
+static uint8_t bnRestN = 0;
+static uint8_t bnNSeg = 0, bnNLeaf = 0;
+static uint32_t bnSeed = 1, bnGrowMs = 0;
+static unsigned long bnLastTick = 0, bnLastSave = 0, bnShakeStart = 0, bnRegrowAt = 0;
+static uint8_t bnRegrowPending = 0;
+static Preferences bnPrefs;
+static bool bnReady = false;
+
+static uint32_t bnRand() {
+  bnSeed ^= bnSeed << 13; bnSeed ^= bnSeed >> 17; bnSeed ^= bnSeed << 5;
+  return bnSeed;
+}
+
+static void bnSegAdd(int x0, int y0, int x1, int y1, uint8_t w, uint16_t t) {
+  if (bnNSeg >= BN_SEGS) return;
+  bnSeg[bnNSeg].x0 = (int16_t)x0; bnSeg[bnNSeg].y0 = (int16_t)y0;
+  bnSeg[bnNSeg].x1 = (int16_t)x1; bnSeg[bnNSeg].y1 = (int16_t)y1;
+  bnSeg[bnNSeg].w = w; bnSeg[bnNSeg].t = t;
+  bnNSeg++;
+}
+
+static void bnLeafAdd(int x, int y, uint16_t t, uint8_t kind) {
+  if (bnNLeaf >= BN_LEAVES) return;
+  bnLeaf[bnNLeaf].x = (int16_t)x; bnLeaf[bnNLeaf].y = (int16_t)y;
+  bnLeaf[bnNLeaf].t = t; bnLeaf[bnNLeaf].kind = kind; bnLeaf[bnNLeaf].on = 1;
+  bnNLeaf++;
+}
+
+// recursive limb: walks in 3 px steps so the silhouette stays blocky
+static void bnBranch(float x, float y, float ang, float len, uint8_t depth,
+                     uint16_t t0, uint16_t t1) {
+  if (depth > 3 || len < 7.0f) return;
+  const int steps = (int)(len / 3.0f);
+  if (steps < 2) return;
+  const uint8_t w = (depth == 0) ? 12 : (depth == 1 ? 7 : (depth == 2 ? 4 : 3));
+  float cx = x, cy = y;
+  for (int i = 0; i < steps; i++) {
+    const float nx = cx + cosf(ang) * 3.0f;
+    const float ny = cy + sinf(ang) * 3.0f;
+    const uint16_t t = (uint16_t)(t0 + (uint32_t)(t1 - t0) * (uint32_t)i / (uint32_t)steps);
+    bnSegAdd((int)cx, (int)cy, (int)nx, (int)ny, w, t);
+    cx = nx; cy = ny;
+    ang += (float)((int)(bnRand() % 21) - 10) * 0.010f;
+    if (depth >= 1 && i > steps * 2 / 3 && (bnRand() % 100) < 30)
+      bnLeafAdd((int)cx + (int)(bnRand() % 9) - 4, (int)cy + (int)(bnRand() % 9) - 4, t, 0);
+    if (depth < 3 && i > steps / 4 && (bnRand() % 100) < 16) {
+      const float spread = 0.55f + (float)(bnRand() % 45) / 100.0f;
+      const float a2 = ang + ((bnRand() & 1) ? spread : -spread);
+      bnBranch(cx, cy, a2, len * 0.55f, (uint8_t)(depth + 1), t, t1);
+    }
+  }
+  if (depth >= 1) {                       // leaves hang off the outer limbs
+    const int nL = 4 + (int)(bnRand() % 4);
+    for (int k = 0; k < nL; k++)
+      bnLeafAdd((int)cx + (int)(bnRand() % 9) - 4,
+                (int)cy + (int)(bnRand() % 9) - 4,
+                (uint16_t)(t1 > 60 ? t1 - 60 : 0), 0);
+  }
+  if (depth >= 2 && (bnRand() % 100) < 45)  // flowers last, and only on tips
+    bnLeafAdd((int)cx + (int)(bnRand() % 7) - 3,
+              (int)cy + (int)(bnRand() % 7) - 3,
+              (uint16_t)(880 + bnRand() % 120), 1);
+}
+
+static void bnGen() {
+  bnNSeg = 0; bnNLeaf = 0;
+  bnBranch(120.0f, (float)(BN_GRND + 1), -1.5708f, 54.0f, 0, 0, 200);   // trunk
+  bnBranch(118.0f, 154.0f, -2.35f, 34.0f, 1, 180, 430);                 // low left
+  bnBranch(122.0f, 142.0f, -0.85f, 36.0f, 1, 200, 470);                 // low right
+  bnBranch(120.0f, 126.0f, -2.05f, 30.0f, 1, 300, 620);                 // high left
+  bnBranch(120.0f, 118.0f, -1.15f, 30.0f, 1, 320, 640);                 // high right
+}
+
+static int bnProgress() {
+  const int p = (int)((uint64_t)bnGrowMs * 1000ULL / BN_FULL_MS);
+  return p > 1000 ? 1000 : p;
+}
+
+static void bnLoad() {
+  bnPrefs.begin("bonsai", false);
+  bnSeed = bnPrefs.getUInt("seed", 0);
+  if (bnSeed == 0) {
+    bnSeed = esp_random() | 1u;
+    bnPrefs.putUInt("seed", bnSeed);
+    // first look: start as a young tree, not a bare seed, so the shape is
+    // visible immediately; the rest of the two hours plays out live.
+    bnGrowMs = (uint32_t)((uint64_t)BN_FULL_MS * 50ULL / 100ULL);
+    bnPrefs.putUInt("grow", bnGrowMs);
+  } else {
+    bnGrowMs = bnPrefs.getUInt("grow", 0);
+  }
+  if (bnGrowMs > BN_FULL_MS) bnGrowMs = BN_FULL_MS;
+  bnGen();
+  bnLastTick = millis();
+  bnReady = true;
+}
+
+// growth clock + leaf physics run in every mode, not just this one
+static void bnTick() {
+  if (!bnReady) return;
+  const unsigned long now = millis();
+  const unsigned long dt = now - bnLastTick;
+  bnLastTick = now;
+  if (bnGrowMs < BN_FULL_MS) {
+    bnGrowMs += (uint32_t)dt;
+    if (bnGrowMs > BN_FULL_MS) bnGrowMs = BN_FULL_MS;
+  }
+  if (now - bnLastSave >= 60000UL) {
+    bnLastSave = now;
+    bnPrefs.putUInt("grow", bnGrowMs);
+  }
+  for (int i = 0; i < BN_FALL; i++) {
+    if (!bnFall[i].live) continue;
+    bnFall[i].vy += 0.30f;
+    bnFall[i].x += bnFall[i].vx;
+    bnFall[i].y += bnFall[i].vy;
+    if (bnFall[i].y >= (float)BN_GRND) {
+      bnFall[i].live = 0;
+      if (bnRestN < BN_FALL) bnRest[bnRestN++] = (int16_t)bnFall[i].x;
+    }
+  }
+  if (bnRegrowPending && now >= bnRegrowAt) {
+    bnRegrowAt = now + BN_REGROW_MS;
+    for (int i = 0; i < bnNLeaf; i++) {
+      if (bnLeaf[i].kind == 0 && !bnLeaf[i].on) { bnLeaf[i].on = 1; bnRegrowPending--; break; }
+    }
+    if (bnRestN) bnRestN--;              // the tree reclaims a fallen leaf
+  }
+}
+
+// button 3: shake the tree
+static void bnInteract() {
+  if (!bnReady) return;
+  const unsigned long now = millis();
+  const int prog = bnProgress();
+  bnShakeStart = now;
+  int matured = 0, attached = 0;
+  for (int i = 0; i < bnNLeaf; i++) {
+    if (bnLeaf[i].kind != 0 || bnLeaf[i].t > prog) continue;
+    matured++;
+    if (bnLeaf[i].on) attached++;
+  }
+  if (matured < 6) return;               // sapling: it only sways
+  int drop = 5 + (int)(bnRand() % 4);
+  const int floorN = matured * 30 / 100;
+  if (attached - drop < floorN) drop = attached - floorN;
+  int dropped = 0;
+  for (int i = 0; i < bnNLeaf && dropped < drop; i++) {
+    if (bnLeaf[i].kind != 0 || !bnLeaf[i].on || bnLeaf[i].t > prog) continue;
+    bnLeaf[i].on = 0;
+    for (int k = 0; k < BN_FALL; k++) {
+      if (bnFall[k].live) continue;
+      bnFall[k].live = 1;
+      bnFall[k].x = (float)bnLeaf[i].x;
+      bnFall[k].y = (float)bnLeaf[i].y;
+      bnFall[k].vx = (float)((int)(bnRand() % 3) - 1) * 0.6f;
+      bnFall[k].vy = 0.4f;
+      break;
+    }
+    dropped++;
+  }
+  if (dropped) {
+    if (!bnRegrowPending) bnRegrowAt = now + BN_REGROW_MS;
+    int pend = (int)bnRegrowPending + dropped;
+    bnRegrowPending = (uint8_t)(pend > 200 ? 200 : pend);
+  }
+}
+
+static void bnPot() {
+  lifeSpr.fillRect(56, 180, 128, 6, 15);          // soil
+  lifeSpr.fillRect(50, 186, 140, 6, 1);           // rim, primary
+  for (int y = 192; y < 218; y++) {               // tray tapers in
+    const int x0 = 58 + (y - 192) / 3, x1 = 182 - (y - 192) / 3;
+    lifeSpr.fillRect(x0, y, x1 - x0, 1, 1);
+  }
+  lifeSpr.fillRect(66, 218, 18, 5, 1);            // feet
+  lifeSpr.fillRect(156, 218, 18, 5, 1);
+}
+
+static void bnRender() {
+  lifeSpr.fillSprite(0);
+  const unsigned long now = millis();
+  const int prog = bnProgress();
+  int amp = 0;
+  if (bnShakeStart) {
+    const unsigned long el = now - bnShakeStart;
+    if (el < BN_SHAKE_MS) amp = (int)((1.0f - (float)el / (float)BN_SHAKE_MS) * 5.0f);
+  }
+  for (int i = 0; i < bnNSeg; i++) {
+    const BnSeg &g = bnSeg[i];
+    if (g.t > prog) continue;
+    int ox = 0;
+    if (amp) ox = (int)(amp * sinf((float)(now - bnShakeStart) * 0.045f + (float)g.y0 * 0.09f));
+    const uint8_t col = (g.w >= 6) ? 11 : 12;
+    const int dx = g.x1 - g.x0, dy = g.y1 - g.y0;
+    if (abs(dx) >= abs(dy)) {
+      const int step = (dx >= 0) ? 2 : -2;
+      for (int x = g.x0; (step > 0) ? (x < g.x1) : (x > g.x1); x += step)
+        lifeSpr.fillRect(x + ox, g.y0 - g.w / 2, 2, g.w, col);
+    } else {
+      const int step = (dy >= 0) ? 2 : -2;
+      for (int y = g.y0; (step > 0) ? (y < g.y1) : (y > g.y1); y += step)
+        lifeSpr.fillRect(g.x0 + ox, y, g.w, 2, col);
+    }
+  }
+  for (int i = 0; i < bnNLeaf; i++) {
+    const BnLeaf &l = bnLeaf[i];
+    if (l.t > prog || !l.on) continue;
+    int ox = 0;
+    if (amp) ox = (int)(amp * sinf((float)(now - bnShakeStart) * 0.045f + (float)l.y * 0.09f));
+    if (l.kind == 0) {
+      lifeSpr.fillRect(l.x + ox, l.y, 4, 3, 13);
+      lifeSpr.fillRect(l.x + 1 + ox, l.y - 2, 3, 2, 14);
+    } else {
+      lifeSpr.fillRect(l.x + ox, l.y, 2, 2, 2);       // flower, secondary
+      lifeSpr.fillRect(l.x + 1 + ox, l.y + 2, 1, 1, 14);
+    }
+  }
+  for (int i = 0; i < BN_FALL; i++) {
+    if (!bnFall[i].live) continue;
+    lifeSpr.fillRect((int)bnFall[i].x, (int)bnFall[i].y, 3, 2, 13);
+  }
+  for (int i = 0; i < bnRestN; i++)
+    lifeSpr.fillRect(bnRest[i], BN_GRND - 1, 3, 2, 13);
+  bnPot();
+  lifeSpr.pushSprite(0, 0);
+}
+
+void bnStart() {
+  bnLastTick = millis();
+  bnRender();
+}
+
+void updateBonsai() {
+  static unsigned long lastDraw = 0;
+  const unsigned long now = millis();
+  const bool shaking = (bnShakeStart && now - bnShakeStart < BN_SHAKE_MS);
+  if (now - lastDraw < (shaking ? 45UL : 120UL)) return;
+  lastDraw = now;
+  bnRender();
+}
+
 
 // ==== Fire (MODE_FIRE): forest-fire percolation (Drossel-Schwabl) ====
 // Four states in 2 bits/cell: 0 bare ground, 1 tree, 2 burning, 3 ember.
@@ -318,8 +584,12 @@ void lifeRepaint();
 void updateLife();
 void boidInit();
 void updateBoids();
+#if 0
 void antInit();
 void updateAnt();
+#endif
+void bnStart();
+void updateBonsai();
 void fireInit();
 void updateFire();
 void knightInit();
@@ -371,7 +641,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "static") == 0)      { pendingMode = MODE_STATIC;      modeDirty = true; }
       else if (strcmp(anim, "now_playing") == 0) { pendingMode = MODE_NOW_PLAYING; modeDirty = true; }
       else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
-      else if (strcmp(anim, "ant") == 0)         { pendingMode = MODE_ANT;         modeDirty = true; }
+      else if (strcmp(anim, "ant") == 0 || strcmp(anim, "bonsai") == 0 || strcmp(anim, "tree") == 0) { pendingMode = MODE_BONSAI; modeDirty = true; }
       else if (strcmp(anim, "fire") == 0)        { pendingMode = MODE_FIRE;        modeDirty = true; }
       else if (strcmp(anim, "knight") == 0 || strcmp(anim, "run") == 0 || strcmp(anim, "jump") == 0) { pendingMode = MODE_KNIGHT; modeDirty = true; }
       else if (strcmp(anim, "radar") == 0 || strcmp(anim, "pet") == 0) { pendingMode = MODE_RADAR; modeDirty = true; }
@@ -482,6 +752,7 @@ void setup() {
 
 // ==========================================
 void loop() {
+  bnTick();                                  // the tree grows whether or not it is shown
   handleButtons();
   if (cycleStart) {                          // Random Cycle: start now
     cycleStart = false;
@@ -556,6 +827,12 @@ void setupTFT() {
   lifeSpr.setPaletteColor(8, tft.color565(225, 70, 10));    // flame deep
   lifeSpr.setPaletteColor(9, tft.color565(110, 25, 10));    // ember
   lifeSpr.setPaletteColor(10, tft.color565(45, 40, 38));    // ash
+  lifeSpr.setPaletteColor(11, tft.color565(120, 74, 34));   // bonsai bark
+  lifeSpr.setPaletteColor(12, tft.color565(152, 98, 46));   // bonsai twig
+  lifeSpr.setPaletteColor(13, tft.color565(42, 140, 58));   // bonsai leaf
+  lifeSpr.setPaletteColor(14, tft.color565(78, 180, 84));   // bonsai leaf light
+  lifeSpr.setPaletteColor(15, tft.color565(58, 36, 16));    // bonsai soil
+  bnLoad();
   lifeSpriteReady = true;
   
   // First ticker frame is rendered by updateMarquee().
@@ -724,8 +1001,8 @@ void setDisplayMode(DisplayMode mode, bool remember) {
     lifeSeed();
   } else if (mode == MODE_BOIDS) {
     boidInit();
-  } else if (mode == MODE_ANT) {
-    antInit();
+  } else if (mode == MODE_BONSAI) {
+    bnStart();
   } else if (mode == MODE_FIRE) {
     fireInit();
   } else if (mode == MODE_KNIGHT) {
@@ -1250,7 +1527,8 @@ void updateBoids() {
   lifeSpr.pushSprite(0, 0);
 }
 
-// ==== Langton's ant (MODE_ANT) ====
+#if 0
+// ==== Langton's ant: PARKED with the slot, nothing deleted ====
 static inline bool antGet(int x, int y) {
   uint32_t idx = (uint32_t)y * LIFE_W + x;
   return (antGrid[idx >> 3] >> (idx & 7)) & 1;
@@ -1296,7 +1574,7 @@ void updateAnt() {
   lifeSpr.pushSprite(0, 0);
 }
 
-
+#endif
 // ==== Fire (MODE_FIRE) ====
 static inline uint8_t ffGet(const uint8_t* buf, int x, int y) {
   uint32_t bit = ((uint32_t)y * FF_W + x) * 2;
@@ -3234,7 +3512,7 @@ void renderDisplay() {
     case MODE_STATIC:      updateLife(); break;
     case MODE_NOW_PLAYING: updateNowPlaying(); break;
     case MODE_BOIDS:       updateBoids(); break;
-    case MODE_ANT:         updateAnt(); break;
+    case MODE_BONSAI:      updateBonsai(); break;
     case MODE_FIRE:        updateFire(); break;
     case MODE_KNIGHT:      updateKnight(); break;
     case MODE_RADAR:       updateTama(); break;
@@ -3312,6 +3590,7 @@ static void tamaInteract() {
 static void modeInteract() {
   switch (activeMode) {
     case MODE_RADAR:  tamaInteract(); break;
+    case MODE_BONSAI: bnInteract();   break;
     case MODE_STATIC: lifeInteract(); break;
     case MODE_KNIGHT: krInteract();   break;
     case MODE_SALVO:  svInteract();   break;
