@@ -4,6 +4,10 @@
 // Copyright © 2026 Shawn Baird
 // ==========================================
 
+#include "dbonsai.h"
+#include "shooter.h"
+#include "dig.h"
+#include "slab.h"
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -61,13 +65,15 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_SALVO, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_BONSAI, MODE_FIRE, MODE_KNIGHT, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ, MODE_INDICATOR, MODE_PIPES };
+enum DisplayMode { MODE_SALVO, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_BONSAI, MODE_FIRE, MODE_KNIGHT, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ, MODE_INDICATOR, MODE_SLAB, MODE_DBONSAI, MODE_DIG };
 
 // Random Cycle: rotate the pod through the visual roster on a timer.
 #define CYCLE_MS 600000UL   // 10 minutes per animation
+// Random Cycle is background ambience, so it skips the things you pick on
+// purpose: quickdraw, slabbed, deep dig, and both bonsai builds.
 static const DisplayMode CYCLE_MODES[] = {
-  MODE_SALVO, MODE_STATIC, MODE_BOIDS, MODE_BONSAI, MODE_FIRE, MODE_KNIGHT, MODE_PIPES,
-  MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ
+  MODE_SALVO, MODE_STATIC, MODE_BOIDS, MODE_FIRE, MODE_KNIGHT,
+  MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY
 };
 #define CYCLE_N ((int)(sizeof(CYCLE_MODES) / sizeof(CYCLE_MODES[0])))
 DisplayMode displayMode = MODE_STATIC;   // the user's chosen animation (persisted)
@@ -171,8 +177,8 @@ static unsigned long lastBoidUpdate = 0;
 #define FOOD_MAX 8
 #define FOOD_EAT_R 7.0f
 #define FOOD_FIRST_MS 5000UL       // first drop shortly after entering the mode
-#define FOOD_MIN_MS 90000UL        // production: a pinch every 90-180 s
-#define FOOD_JIT_MS 90000UL
+#define FOOD_MIN_MS 240000UL       // ambient pinch every 4-7 min; taps are the real feeding
+#define FOOD_JIT_MS 180000UL
 #define SPLASH_MAX 4
 #define SPLASH_FRAMES 12
 static bool foodActive = false;
@@ -182,6 +188,12 @@ static unsigned long nextFoodAt = 0;
 struct Splash { float x; int t; };
 static Splash splashes[SPLASH_MAX];
 static float wavePhase = 0.0f;   // scrolling surface phase
+static float waveKick = 0.0f;    // decaying wake after the bowl is shaken
+static unsigned long frightUntil = 0;   // fish stay low until this passes
+static unsigned long lastFishTap = 0;
+#define FISH_DOUBLE_MS 350UL
+#define FRIGHT_MS      5000UL
+#define FISH_BOTTOM_Y  206
 
 // ==== Langton's ant: PARKED 2026-10-24 (Bonsai took the slot). Nothing deleted.
 #if 0
@@ -202,22 +214,23 @@ static unsigned long lastAntUpdate = 0;
 #define BN_FAST_TEST  1           // TEMPORARY bench speed: 1 line back to real pacing
 #if BN_FAST_TEST
 #define BN_LEAF_MS    30UL
-#define BN_WOOD_BASE  1UL
-#define BN_WOOD_MIN   20UL
+#define BN_WOOD_PER_PX 1UL
+#define BN_WOOD_MIN   2000UL
 #define BN_REPLANT_MS 240000UL    // fresh tree every 4 min while fast
 #else
 #define BN_LEAF_MS    800UL       // one leaf per beat until the canopy is even
-#define BN_WOOD_BASE  480UL       // pacing constant for the size term
+#define BN_WOOD_PER_PX 1UL        // extra ms per existing wood pixel
 #define BN_WOOD_MIN   2000UL
 #endif
 #define BN_BOLE_Y     (BN_GRND - 30)   // bare bole: no leaves, no wood below this
 #define BN_LEAF_PER_WOOD 2             // leaves a leaf-bearing wood pixel supports
-#define BN_WOOD_MAX   1400
+#define BN_WOOD_MAX   12000
 #define BN_SHAKE_MS   1200UL
-#define BN_THIN_MAX   60          // 1-px branches: quarter of the screen
+#define BN_FRINGE     4           // a twig is only legal this close to structure
+#define BN_GIRTH_EVERY 4          // one thickening pass per N structural pixels
 #define BN_DIEBACK    60          // cut back a quarter of the screen
-#define BN_LEAF_MAX   430
-#define BN_FRONT_MAX  1200
+#define BN_LEAF_MAX   5000
+#define BN_FRONT_MAX  8000
 
 struct BnLf { int16_t x, y; uint8_t alive; };
 
@@ -231,6 +244,7 @@ static uint16_t bnLeafAlive = 0;
 static uint16_t bnFront[BN_FRONT_MAX];        // wood pixels worth growing from
 static uint16_t bnFrontN = 0;
 static uint16_t bnFrontPos = 0;               // ring write head
+static uint16_t bnStructSince = 0;            // structural pixels since last girth pass
 static uint16_t bnRecent[BN_DIEBACK];         // newest wood, for dieback
 static uint8_t  bnRecentI = 0;
 static unsigned long bnLastLeaf = 0, bnLastWood = 0, bnShakeStart = 0, bnLastTick = 0;
@@ -264,7 +278,7 @@ static void bnSetWood(int x, int y, uint8_t t) {
   if (bnWood[y * BN_W + x]) return;
   bnWood[y * BN_W + x] = t;
   bnWoodN++;
-  if (t <= 2 && y < BN_BOLE_Y) bnLeafWood++;   // thin, above the bole: leaf-bearing
+  if (t == 1 && y < BN_BOLE_Y) bnLeafWood++;   // twig fringe only: thick wood stays bare
   bnRecent[bnRecentI] = (uint16_t)(y * BN_W + x);
   bnRecentI = (uint8_t)((bnRecentI + 1) % BN_DIEBACK);
   bnFrontPush(x, y);
@@ -273,31 +287,6 @@ static void bnSetWood(int x, int y, uint8_t t) {
     const int ny = y + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
     if (bnAt(nx, ny)) bnFrontPush(nx, ny);
   }
-}
-
-// step distance to thick wood: a 1-px branch may not run past a quarter screen
-static int bnDistToThick(int x, int y, int cap) {
-  static uint8_t  dist[61][61];
-  static uint16_t q[3721];
-  memset(dist, 0xFF, sizeof(dist));
-  int head = 0, tail = 0;
-  dist[30][30] = 0;
-  q[tail++] = (uint16_t)((30 << 6) | 30);
-  while (head < tail) {
-    const uint16_t cur = q[head++];
-    const int ox = cur >> 6, oy = cur & 63;
-    const int cd = dist[oy][ox];
-    if (bnAt(x + ox - 30, y + oy - 30) >= 3) return cd;
-    if (cd >= cap) continue;
-    for (int k = 0; k < 4; k++) {
-      const int nx = ox + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
-      const int ny = oy + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
-      if (nx < 0 || ny < 0 || nx > 60 || ny > 60 || dist[ny][nx] != 0xFF) continue;
-      dist[ny][nx] = (uint8_t)(cd + 1);
-      if (tail < 3721) q[tail++] = (uint16_t)((nx << 6) | ny);
-    }
-  }
-  return cap + 1;
 }
 
 static void bnDropLeavesNear(int x, int y) {
@@ -319,7 +308,7 @@ static void bnDieback() {
     const uint8_t t = bnWood[idx];
     bnWood[idx] = 0;
     if (bnWoodN) bnWoodN--;
-    if (t <= 2 && y < BN_BOLE_Y && bnLeafWood) bnLeafWood--;
+    if (t == 1 && y < BN_BOLE_Y && bnLeafWood) bnLeafWood--;
     bnDropLeavesNear(x, y);
   }
 }
@@ -327,6 +316,14 @@ static void bnDieback() {
 static bool bnNearEdgeOrPot(int x, int y) {
   if (x <= 4 || x >= BN_W - 5 || y <= 4) return true;
   if (y >= 182 && x >= 44 && x <= 196) return true;   // pot mouth
+  return false;
+}
+
+// structural wood (tier 2 or the trunk) within r pixels?
+static bool bnNearStruct(int x, int y, int r) {
+  for (int dy = -r; dy <= r; dy++)
+    for (int dx = -r; dx <= r; dx++)
+      if (bnAt(x + dx, y + dy) >= 2) return true;
   return false;
 }
 
@@ -390,12 +387,15 @@ static void bnWoodStep() {
       const int ny = wy + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
       const uint8_t ct = bnAt(nx, ny);
       if (!ct) continue;
-      const uint8_t nt = (ct >= 3) ? 2 : 1;
-      if (nt == 1 && bnDistToThick(wx, wy, BN_THIN_MAX) > BN_THIN_MAX) {
-        bnThicken();                      // too spindly out here: build girth
-        return;
-      }
+      // A twig is only legal as a fringe on structural wood. Anything reaching
+      // into open space deposits structural wood, so limbs thicken as they
+      // extend and twigs can never become strands.
+      const uint8_t nt = bnNearStruct(wx, wy, BN_FRINGE) ? 1 : 2;
       bnSetWood(wx, wy, nt);
+      if (nt == 2 && ++bnStructSince >= BN_GIRTH_EVERY) {
+        bnStructSince = 0;
+        bnThicken();                      // girth follows length
+      }
       if (bnNearEdgeOrPot(wx, wy)) bnDieback();
       return;
     }
@@ -407,7 +407,7 @@ static void bnWoodStep() {
 
 static bool bnAddLeaf() {
   int x = 0, y = 0;
-  if (!bnPickFrontIn(1, 2, &x, &y)) return false;   // tier 3 is bole/limb: bare
+  if (!bnPickFrontIn(1, 1, &x, &y)) return false;   // twig fringe only
   for (int k = 0; k < 4; k++) {
     const int nx = x + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
     const int ny = y + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
@@ -435,7 +435,7 @@ static float   bnTa[BN_TRUNK_LEN];
 
 static void bnPlant() {
   memset(bnWood, 0, sizeof(bnWood));
-  bnWoodN = 0; bnLeafWood = 0; bnFrontN = 0; bnFrontPos = 0;
+  bnWoodN = 0; bnLeafWood = 0; bnFrontN = 0; bnFrontPos = 0; bnStructSince = 0;
   bnLeafN = 0; bnLeafAlive = 0;
   bnRecentI = 0;
   memset(bnRecent, 0, sizeof(bnRecent));
@@ -510,8 +510,7 @@ static void bnTick() {
   // belt and braces: if the canopy literally cannot be filled, the tree keeps
   // building instead of freezing forever behind an impossible leaf target
   if ((int)bnLeafAlive >= target || leafStuck) {
-    unsigned long interval = BN_WOOD_BASE * (unsigned long)(bnWoodN < 40 ? 40 : bnWoodN) / BN_SANITY;
-    if (interval < BN_WOOD_MIN) interval = BN_WOOD_MIN;
+    unsigned long interval = BN_WOOD_MIN + (unsigned long)BN_WOOD_PER_PX * bnWoodN;
     if (now - bnLastWood >= interval) {
       bnLastWood = now;
       if (bnRand() % 100 < 70) bnWoodStep();
@@ -596,6 +595,93 @@ void updateBonsai() {
 }
 
 
+
+// ==== DLA bonsai (MODE_DBONSAI): authored skeleton, accreted foliage ====
+// The module in dbonsai.cpp grows a 60x60 tree: parametric trunk/branches, then
+// foliage clumps accreted one cell at a time. Time is compressed for the bench:
+// 24 simulated hours run in ~1.5 minutes, then the tree holds and replants.
+#define SH_FORCE_BOOT 0       // normal boot: show startup marquee, then honor saved mode/cycle
+#define DNB_W        60
+#define DNB_H        60
+#define DNB_PX       4
+#define DNB_ACCEL    120UL            // simulated ms per real ms (~40 s to grown)
+#define DNB_HOLD_MS  6000UL           // hold the finished tree, then replant
+#define DNB_SIM_FULL (24UL * 3600000UL)
+
+static uint8_t dnbPrev[DNB_W * DNB_H];
+static unsigned long dnbLast = 0, dnbDoneAt = 0;
+static uint32_t dnbSimMs = 0;
+static unsigned long dnbLastChange = 0;
+static bool dnbReady = false;
+
+static void dnbBlit(int x, int y, uint8_t slot) {
+  lifeSpr.fillRect(x * DNB_PX, y * DNB_PX, DNB_PX, DNB_PX, slot);
+}
+
+static void dnbRepaintAll() {
+  lifeSpr.fillSprite(0);
+  for (int y = 0; y < DNB_H; y++)
+    for (int x = 0; x < DNB_W; x++) {
+      uint8_t s = dnbCell(x, y);
+      dnbPrev[y * DNB_W + x] = s;
+      if (s) dnbBlit(x, y, s);
+    }
+  lifeSpr.pushSprite(0, 0);
+}
+
+static void dnbStart() {
+  dnbInit((uint32_t)esp_random());
+  dnbSimMs = 0;
+  dnbDoneAt = 0;
+  dnbLast = millis();
+  dnbLastChange = dnbLast;
+  dnbReady = true;
+  dnbRepaintAll();
+  Serial.println("[DNB] new tree");
+}
+
+static void dnbInteract() {          // button: replant a fresh tree
+  dnbStart();
+}
+
+static void dnbUpdate() {
+  if (!dnbReady) return;
+  unsigned long now = millis();
+  uint32_t dt = (uint32_t)(now - dnbLast);
+  dnbLast = now;
+  if (dt > 250) dt = 250;            // never fast-forward after a hitch
+
+  if (!dnbDoneAt) {
+    uint32_t sim = dt * DNB_ACCEL;
+    if (dnbSimMs + sim > DNB_SIM_FULL) sim = DNB_SIM_FULL - dnbSimMs;
+    if (sim) { dnbTick(sim); dnbSimMs += sim; }
+    if (dnbSimMs >= DNB_SIM_FULL || now - dnbLastChange > 15000UL) {
+      dnbDoneAt = now;
+      Serial.println("[DNB] grown");
+    }
+  } else if (now - dnbDoneAt > DNB_HOLD_MS) {
+    dnbStart();
+    return;
+  }
+
+  bool dirty = false;
+  for (int y = 0; y < DNB_H; y++)
+    for (int x = 0; x < DNB_W; x++) {
+      uint8_t s = dnbCell(x, y);
+      int i = y * DNB_W + x;
+      if (s == dnbPrev[i]) continue;
+      dnbPrev[i] = s;
+      dnbBlit(x, y, s);
+      dirty = true;
+      dnbLastChange = now;
+    }
+  if (dnbDoneAt && ((now / 700) & 1UL)) {   // slow blink on the soil when complete
+    lifeSpr.fillRect(0, 60 * DNB_PX - 2, 240, 2, 15);
+    dirty = true;
+  }
+  if (dirty) lifeSpr.pushSprite(0, 0);
+}
+
 // ==== Fire (MODE_FIRE): forest-fire percolation (Drossel-Schwabl) ====
 // Four states in 2 bits/cell: 0 bare ground, 1 tree, 2 burning, 3 ember.
 // Trees sprout, lightning starts a strike, fire spreads to orthogonal
@@ -629,26 +715,403 @@ static float pipeCosY, pipeSinY, pipeCosP, pipeSinP;
 #define PIPE_SCALE 19.0f
 
 // ==== Pet (MODE_RADAR slot): a small persistent goo creature ====
-// Stats live in NVS so the pet keeps ageing across power cycles and modes.
+// Two meters, one button. Food falls on one side of the face; the goo walks
+// over and eats it. Left with hunger at zero long enough it dries into a
+// crust: it cannot walk, but stretches a pseudopod to food dropped beside it.
 #define TAMA_TICK_MS 110
 static Preferences tamaPrefs;
-static uint8_t tHunger = 80, tHappy = 70, tEnergy = 90, tPoops = 0;
+static uint8_t tHunger = 80, tHappy = 70, tPoops = 0;
 static uint16_t tAgeMin = 0;
-static bool tSleeping = false;
 static unsigned long tLastTick = 0, tLastSave = 0;
-static unsigned long tEatUntil = 0, tPlayUntil = 0, tSleepUntil = 0;
+static unsigned long tEatUntil = 0, tPlayUntil = 0;
 static unsigned long tBlinkAt = 0, tBlinkUntil = 0, tPoopAt = 0;
-static uint32_t tHungerAcc = 0, tHappyAcc = 0, tEnergyAcc = 0, tMinuteAcc = 0;
-static int16_t tOffX = 0;              // wander offset from centre
+static uint32_t tHungerAcc = 0, tHappyAcc = 0, tMinuteAcc = 0;
+static int16_t tOffX = 0;              // pixel offset from centre
 static int8_t tDir = 1;
-static unsigned long tWanderAt = 0, tPlayCheckAt = 0, tPoopClearAt = 0;
-// Goo rendering state: the pet is chunky pixel art on a 4px grid, not vector shapes.
+static unsigned long tWanderAt = 0;
+static bool tFoodOn = false;
+static int8_t tFoodSide = 0;
+static int16_t tFoodX = 0, tFoodY = 0;
+static unsigned long tFoodLandedAt = 0;
+static unsigned long tPlayStart = 0;   // when the current play animation began
+static int tPlayKind = 0;              // 0 = squish, 1 = lift/drop/bounce
+static bool tDry = false;
+static unsigned long tDrySince = 0;
+static bool tTapPending = false;
+static unsigned long tTapAt = 0;
+#define TAP_WINDOW_MS   450UL      // second press inside this is a double tap
+#define DRY_AFTER_MS    900000UL   // 15 min pinned at zero hunger dries it out
+#define DRY_WAKE_HUNGER 40         // eat back to here and it can move again
+#define FOOD_FLOOR_Y    178
 #define GOO_CELL 4
 static float tGooPhase = 0.0f;
 static int8_t tDripRow = -1, tDripSide = 1;
 static uint8_t tPuddlePulse = 0;
 static inline int gooRowOff(int r) {
   return (int)lroundf(1.3f * sinf(r * 0.62f - tGooPhase));
+}
+
+static void tamaLoad() {
+  tamaPrefs.begin("tama", false);
+  tHunger = tamaPrefs.getUChar("hunger", 80);
+  tHappy  = tamaPrefs.getUChar("happy", 70);
+  tPoops  = tamaPrefs.getUChar("poops", 0);
+  tAgeMin = tamaPrefs.getUShort("age", 0);
+  tDry    = tamaPrefs.getBool("dry", false);
+}
+
+static void tamaSave() {
+  tamaPrefs.putUChar("hunger", tHunger);
+  tamaPrefs.putUChar("happy", tHappy);
+  tamaPrefs.putUChar("poops", tPoops);
+  tamaPrefs.putUShort("age", tAgeMin);
+  tamaPrefs.putBool("dry", tDry);
+}
+
+void radarInit() {                     // mode entry
+  randomSeed(esp_random());
+  tamaLoad();
+  lifeSpr.fillSprite(0);
+  const unsigned long now = millis();
+  tLastTick = now;
+  tLastSave = now;
+  tEatUntil = tPlayUntil = 0;
+  tBlinkAt = now + 1500 + random(2500);
+  tBlinkUntil = 0;
+  tPoopAt = now + 180000UL + random(120000UL);
+  tHungerAcc = tHappyAcc = tMinuteAcc = 0;
+  tOffX = 0;
+  tDir = tDry ? 0 : 1;
+  tWanderAt = now + 4000;
+  tFoodOn = false;
+  tFoodY = 0;
+  tTapPending = false;
+}
+
+static void tamaHeart(int x, int y) {
+  lifeSpr.fillRect(x,     y,     2, 2, 2);
+  lifeSpr.fillRect(x + 3, y,     2, 2, 2);
+  lifeSpr.fillRect(x + 1, y + 2, 3, 2, 2);
+}
+
+// Drop a pellet. A dry crust gets it within arm's reach; a wet goo gets it on
+// one side of the face, so it has to walk over.
+static void tamaDropFood() {
+  tFoodSide = (int8_t)(!tFoodSide);
+  tFoodOn = true;
+  tFoodY = 40;
+  if (tDry) tFoodX = (int16_t)(120 + tOffX + (random(2) ? 16 : -16));
+  else      tFoodX = (int16_t)(tFoodSide ? 164 : 76);
+  tFoodLandedAt = 0;
+}
+
+// One press: clean poop if there is any, else feed. It waits out the
+// double-tap window first, so a double press is not read as two feeds.
+static void tamaTap() {
+  const unsigned long now = millis();
+  if (tTapPending && now - tTapAt <= TAP_WINDOW_MS) {
+    tTapPending = false;
+    tPlayStart = now;
+    if (!tDry) {
+      tPlayKind = (int)(random(3));    // 0 squish, 1 lift+drop+bounce, 2 hop
+      tPlayUntil = now + 1600UL;
+      tHappy = (tHappy > 84) ? 100 : (uint8_t)(tHappy + 16);
+    } else {
+      tPlayKind = 0;
+      tPlayUntil = now + 700UL;        // a tremble: it cannot play, but it twitches
+    }
+    tamaSave();
+    return;
+  }
+  tTapPending = true;
+  tTapAt = now;
+}
+
+void updateTama() {
+  const unsigned long now = millis();
+  if (now - tLastTick < TAMA_TICK_MS) return;
+  const unsigned long dt = now - tLastTick;
+  tLastTick = now;
+
+  // ---- a pending single tap fires once the double-tap window closes ----
+  if (tTapPending && now - tTapAt > TAP_WINDOW_MS) {
+    tTapPending = false;
+    if (tPoops > 0) {
+      tPoops--;
+      tHappy = (tHappy > 96) ? 100 : (uint8_t)(tHappy + 4);
+    } else {
+      tamaDropFood();
+    }
+    tamaSave();
+  }
+
+  // ---- timed actions end ----
+  if (tEatUntil  && now >= tEatUntil)  tEatUntil  = 0;
+  if (tPlayUntil && now >= tPlayUntil) tPlayUntil = 0;
+
+  // ---- meters ----
+  tHungerAcc += (uint32_t)dt;
+  tHappyAcc  += (uint32_t)dt;
+  tMinuteAcc += (uint32_t)dt;
+  if (tMinuteAcc >= 60000UL) { tMinuteAcc = 0; if (tAgeMin < 65000) tAgeMin++; }
+  if (tHungerAcc >= 20000UL) { tHungerAcc = 0; if (tHunger) tHunger--; }
+  if (tHappyAcc >= (tPoops ? 20000UL : 45000UL)) {
+    tHappyAcc = 0;
+    if (tHappy) tHappy--;
+  }
+
+  // ---- drying out: a state, not a third meter ----
+  if (tHunger == 0) {
+    if (!tDrySince) tDrySince = now;
+    if (!tDry && now - tDrySince >= DRY_AFTER_MS) {
+      tDry = true;
+      tDir = 0;
+      tamaSave();
+    }
+  } else {
+    tDrySince = 0;
+    if (tDry && tHunger >= DRY_WAKE_HUNGER) {
+      tDry = false;
+      tDir = 1;
+      tamaSave();
+    }
+  }
+
+  // ---- food: falls, then either walked to or reached for ----
+  if (tFoodOn) {
+    if (tFoodY < FOOD_FLOOR_Y) {
+      tFoodY = (int16_t)(tFoodY + 6);
+      if (tFoodY >= FOOD_FLOOR_Y) { tFoodY = FOOD_FLOOR_Y; tFoodLandedAt = now; }
+    } else if (tDry) {
+      if (tFoodLandedAt && now - tFoodLandedAt > 1200UL) {   // pseudopod
+        tHunger = (tHunger > 70) ? 100 : (uint8_t)(tHunger + 25);
+        tHappy  = (tHappy  > 95) ? 100 : (uint8_t)(tHappy + 4);
+        tFoodOn = false;
+        tEatUntil = now + 900UL;
+        tamaSave();
+      }
+    } else {
+      const int gooX = 120 + tOffX;
+      if (gooX < (int)tFoodX - 10)      { tOffX = (int16_t)(tOffX + 2); tDir = 1; }
+      else if (gooX > (int)tFoodX + 10) { tOffX = (int16_t)(tOffX - 2); tDir = -1; }
+      else {
+        tHunger = (tHunger > 70) ? 100 : (uint8_t)(tHunger + 30);
+        tHappy  = (tHappy  > 95) ? 100 : (uint8_t)(tHappy + 5);
+        tFoodOn = false;
+        tEatUntil = now + 1200UL;
+        tamaSave();
+      }
+      if (tOffX > 44) tOffX = 44;
+      if (tOffX < -44) tOffX = -44;
+    }
+  }
+
+  // ---- wander: never while food is out, never while dry ----
+  if (!tFoodOn && !tDry && now >= tWanderAt) {
+    tWanderAt = now + 5000UL + random(6000UL);
+    if (random(100) < 45) tDir = (int8_t)(random(2) ? 1 : -1);
+    if (random(100) < 15) tDir = 0;                 // pause and look around
+  }
+  if (!tFoodOn && !tDry && tDir != 0) {
+    const int16_t nx = (int16_t)(tOffX + tDir);
+    bool blocked = false;
+    for (int i = 0; i < tPoops; i++) {              // steer around its own mess
+      const int px = 88 + i * 20 - 120;
+      if (nx > px - 14 && nx < px + 22) blocked = true;
+    }
+    if (blocked) tDir = (int8_t)-tDir;
+    else tOffX = nx;
+    if (tOffX > 44)  { tOffX = 44;  tDir = -1; }
+    if (tOffX < -44) { tOffX = -44; tDir = 1; }
+  }
+
+  // ---- poops: it leaves one; only the button cleans it ----
+  if (now >= tPoopAt && tPoops < 3) {
+    tPoops++;
+    tPoopAt = now + 180000UL + random(180000UL);
+  }
+
+  // ---- blink ----
+  if (!tBlinkUntil && now >= tBlinkAt) {
+    tBlinkUntil = now + 220;
+  } else if (tBlinkUntil && now >= tBlinkUntil) {
+    tBlinkUntil = 0;
+    tBlinkAt = now + 2000UL + random(4000UL);
+  }
+
+  // ---- persistence every 5 min ----
+  if (now - tLastSave >= 300000UL) { tLastSave = now; tamaSave(); }
+
+  // ---- draw: chunky pixel goo ----
+  lifeSpr.fillSprite(0);
+  const bool eating  = (tEatUntil != 0);
+  const bool playing = (tPlayUntil != 0);
+  const bool shut    = (tBlinkUntil != 0);
+
+  tGooPhase += playing ? 0.55f : 0.22f;
+  if (tGooPhase > 6.28318f) tGooPhase -= 6.28318f;
+
+  const int cxPix = tOffX / GOO_CELL;
+  const int floorY = 164;                // where the body meets the floor
+  static const uint8_t GOO_HW[16] = {3, 4, 4, 5, 5, 6, 6, 7, 7, 7, 8, 8, 8, 8, 8, 7};
+
+  float sy = 1.0f;                       // vertical scale
+  int   lift = 0;                        // px, negative = off the floor
+  bool  ball = false;
+
+  if (playing && !tDry) {
+    const uint32_t el = (uint32_t)(now - tPlayStart);
+    if (tPlayKind == 0) {
+      // squish: press flat, hold, pop back with a small overshoot
+      if      (el < 260)  sy = 1.0f - 0.45f * ((float)el / 260.0f);
+      else if (el < 1150) sy = 0.55f;
+      else if (el < 1450) sy = 0.55f + 0.57f * ((float)(el - 1150) / 300.0f);
+      else                sy = 1.12f - 0.12f * ((float)(el - 1450) / 150.0f);
+    } else if (tPlayKind == 1) {
+      // lift, drop, two bounces: it leaves the floor as a ball
+      ball = true;
+      if      (el < 500)  lift = -(int)(60.0f * ((float)el / 500.0f) * ((float)el / 500.0f));
+      else if (el < 800)  lift = -(int)(60.0f * (1.0f - (float)(el - 500) / 300.0f));
+      else if (el < 1050) lift = -(int)(30.0f * sinf(3.14159f * (float)(el - 800) / 250.0f));
+      else if (el < 1250) lift = -(int)(12.0f * sinf(3.14159f * (float)(el - 1050) / 200.0f));
+      else                lift = 0;
+    } else {
+      // hop: the original quick bounce, with a squash on each landing
+      const bool air = ((el / 160) & 1) != 0;
+      lift = air ? -8 : 0;
+      sy = air ? 1.0f : 0.94f;
+    }
+  }
+
+  const int baseYBody = floorY + lift;
+  int rowsDrawn = (int)(16.0f * sy + 0.5f);
+  if (rowsDrawn < 6) rowsDrawn = 6;
+  const float sx = 1.0f / sqrtf(sy < 0.2f ? 0.2f : sy);
+
+  if (tDry) {
+    // A crust: only the bottom rows survive, no wobble, no puddle. It can
+    // still twitch when the button is pressed.
+    const int cxJ = cxPix + (playing ? (((now / 120) & 1) ? 1 : -1) : 0);
+    for (int r = 12; r < 16; r++) {
+      const int hw = GOO_HW[r] + 1;
+      lifeSpr.fillRect(120 + (cxJ - hw) * GOO_CELL, floorY - (16 - r) * GOO_CELL,
+                       (2 * hw + 1) * GOO_CELL, GOO_CELL, 1);
+    }
+    lifeSpr.fillRect(120 + (cxJ - 6) * GOO_CELL, floorY - 12, 2 * GOO_CELL, GOO_CELL, 0);
+    lifeSpr.fillRect(120 + (cxJ + 3) * GOO_CELL, floorY - 16, GOO_CELL, 2 * GOO_CELL, 0);
+    if (!shut) {
+      lifeSpr.fillRect(120 + (cxJ - 4) * GOO_CELL, floorY - 12, GOO_CELL, GOO_CELL, 0);
+      lifeSpr.fillRect(120 + (cxJ + 2) * GOO_CELL, floorY - 12, GOO_CELL, GOO_CELL, 0);
+    }
+  } else {
+    // Body: droplet while grounded, ball while airborne.
+    for (int r = 0; r < rowsDrawn; r++) {
+      const int src = (rowsDrawn > 1) ? (r * 15) / (rowsDrawn - 1) : 15;
+      int hw;
+      if (ball) {
+        float dy = 2.0f * (float)r / (float)(rowsDrawn - 1) - 1.0f;
+        if (dy < -1.0f) dy = -1.0f;
+        if (dy >  1.0f) dy =  1.0f;
+        hw = (int)lroundf(9.0f * sqrtf(1.0f - dy * dy));
+      } else {
+        hw = (int)lroundf((float)GOO_HW[src] * sx);
+      }
+      if (hw < 1) hw = 1;
+      const int off = ball ? 0 : gooRowOff(src);
+      const int yy  = baseYBody - (rowsDrawn - r) * GOO_CELL;
+      lifeSpr.fillRect(120 + (cxPix + off - hw) * GOO_CELL, yy,
+                       (2 * hw + 1) * GOO_CELL, GOO_CELL, 1);
+    }
+
+    // Puddle stays on the floor even while the body is in the air.
+    const int puddleHw = 9 + (tPuddlePulse ? 1 : 0);
+    lifeSpr.fillRect(120 + (cxPix - puddleHw) * GOO_CELL, floorY,
+                     (2 * puddleHw + 1) * GOO_CELL, GOO_CELL, 1);
+    lifeSpr.fillRect(120 + (cxPix - puddleHw + 2) * GOO_CELL, floorY + GOO_CELL,
+                     (2 * puddleHw - 3) * GOO_CELL, GOO_CELL, 1);
+    if (tPuddlePulse) tPuddlePulse--;
+
+    // Falling bead only while it is a grounded blob.
+    if (!ball) {
+      if (tDripRow >= 0) {
+        tDripRow++;
+        if (tDripRow >= rowsDrawn) { tDripRow = -1; tPuddlePulse = 8; }
+        else {
+          const int srow = (tDripRow * 15) / (rowsDrawn > 1 ? rowsDrawn - 1 : 1);
+          const int dhw = (int)lroundf((float)GOO_HW[srow] * sx);
+          lifeSpr.fillRect(120 + (cxPix + tDripSide * dhw) * GOO_CELL,
+                           baseYBody - (rowsDrawn - tDripRow) * GOO_CELL,
+                           GOO_CELL, GOO_CELL, 1);
+        }
+      } else if (random(240) == 0) {
+        tDripRow = 9;
+        tDripSide = (int8_t)(random(2) ? 1 : -1);
+      }
+    }
+
+    // Face near the top of the mass.
+    const int eyeY = baseYBody - (int)((float)rowsDrawn * GOO_CELL * 0.78f);
+    const int eyeH = shut ? GOO_CELL : 2 * GOO_CELL;
+    const int eyeL = 120 + (cxPix - 4) * GOO_CELL;
+    const int eyeR = 120 + (cxPix + 2) * GOO_CELL;
+    lifeSpr.fillRect(eyeL, eyeY, 2 * GOO_CELL, eyeH, 0);
+    lifeSpr.fillRect(eyeR, eyeY, 2 * GOO_CELL, eyeH, 0);
+    if (!shut) {
+      lifeSpr.fillRect(eyeL, eyeY, GOO_CELL, GOO_CELL, 2);
+      lifeSpr.fillRect(eyeR, eyeY, GOO_CELL, GOO_CELL, 2);
+    }
+
+    const int my = eyeY + 3 * GOO_CELL;
+    const int mx = 120 + cxPix * GOO_CELL;
+    if (eating || tHunger < 25) {
+      lifeSpr.fillRect(mx - GOO_CELL, my, 2 * GOO_CELL, 2 * GOO_CELL, 0);
+    } else if (tHappy >= 70) {
+      lifeSpr.fillRect(mx - 2 * GOO_CELL, my - GOO_CELL, GOO_CELL, GOO_CELL, 0);
+      lifeSpr.fillRect(mx, my, GOO_CELL, GOO_CELL, 0);
+      lifeSpr.fillRect(mx + GOO_CELL, my - GOO_CELL, GOO_CELL, GOO_CELL, 0);
+    } else if (tHappy < 30) {
+      lifeSpr.fillRect(mx, my, GOO_CELL, GOO_CELL, 0);
+      lifeSpr.fillRect(mx - 2 * GOO_CELL, my + GOO_CELL, GOO_CELL, GOO_CELL, 0);
+      lifeSpr.fillRect(mx + GOO_CELL, my + GOO_CELL, GOO_CELL, GOO_CELL, 0);
+    } else {
+      lifeSpr.fillRect(mx - GOO_CELL, my, 2 * GOO_CELL, GOO_CELL, 0);
+    }
+  }
+
+  // ---- food pellet, and the pseudopod when it cannot walk ----
+  if (tFoodOn) {
+    lifeSpr.fillRect(tFoodX, tFoodY, 2 * GOO_CELL, 2 * GOO_CELL, 5);
+    lifeSpr.fillRect(tFoodX, tFoodY, GOO_CELL, GOO_CELL, 2);
+    if (tDry && tFoodY >= FOOD_FLOOR_Y) {
+      const int armY = floorY - 8;
+      const int gooX = 120 + cxPix * GOO_CELL;
+      const int x0 = gooX + (tFoodX > gooX ? 10 : -10);
+      const int step = (tFoodX > x0) ? GOO_CELL : -GOO_CELL;
+      for (int x = x0; step > 0 ? x < tFoodX : x > tFoodX; x += step)
+        lifeSpr.fillRect(x, armY + (((x / 8) & 1) ? 2 : 0), GOO_CELL, 2, 1);
+    }
+  }
+
+  // Hearts when content.
+  if (tHappy >= 70 && !tDry && !shut && ((now / 900) & 1)) {
+    tamaHeart(150, baseYBody - rowsDrawn * GOO_CELL - 10);
+    tamaHeart(166, baseYBody - rowsDrawn * GOO_CELL - 28);
+  }
+
+  // Poops: squat pixel clumps on the floor.
+  for (int i = 0; i < tPoops; i++) {
+    const int px = 88 + i * 20;
+    lifeSpr.fillRect(px, 184, 3 * GOO_CELL, 2 * GOO_CELL, 7);
+    lifeSpr.fillRect(px + GOO_CELL, 180, GOO_CELL, GOO_CELL, 7);
+  }
+
+  // HUD: hunger pips on the left, happiness pips on the right.
+  for (int i = 0; i < 5; i++) {
+    lifeSpr.fillRect(74 + i * 6, 26, 4, 4, (tHunger > i * 20) ? 1 : 7);
+    lifeSpr.fillRect(130 + i * 6, 26, 4, 4, (tHappy  > i * 20) ? 5 : 7);
+  }
+
+  lifeSpr.pushSprite(0, 0);
 }
 
 // ==== Crystal (MODE_STARFIELD): diffusion-limited aggregation ====
@@ -704,7 +1167,8 @@ static float rallyBallX, rallyBallY, rallyBallVX, rallyBallVY;
 static int rallyScoreL = 0, rallyScoreR = 0, rallyServeDelay = 0, rallyFrame = 0;
 static unsigned long lastRallyUpdate = 0;
 
-// ==== Eye (MODE_EQ): pixel-art eyeball, bored most of the time ====
+// ==== Eye (MODE_EQ): pixel-art eyeball — parked, quickdraw shooter took the slot ====
+#if 0
 static uint8_t eyeSpecies = 0;              // 0 human, 1 cat, 2 goat, 3 robot
 static float eyeGX = 0, eyeGY = 0;          // current gaze offset, px
 static float eyeTargetX = 0, eyeTargetY = 0;
@@ -713,6 +1177,7 @@ static bool eyeSnap = false;
 static unsigned long lastEyeUpdate = 0;
 static unsigned long eyeNextDriftAt = 0, eyeNextSnapAt = 0, eyeSnapEnd = 0;
 static unsigned long eyeNextBlinkAt = 0, eyeBlinkEnd = 0, eyeNextSpeciesAt = 0;
+#endif
 
 // ==== Forward Declarations ====
 void setupTFT();
@@ -747,8 +1212,13 @@ void snkInit();
 void updateSnake();
 void rallyInit();
 void updateRally();
-void eyeInit();
-void updateEye();
+static void shStart();
+static void shUpdate();
+static void dgStart();
+static void dgUpdate();
+static void slStart();
+static void slUpdate();
+static void slInteract();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode, bool remember = false);
 void applyDisplayColor();
@@ -777,12 +1247,13 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       const char* anim = doc["animation"] | "";
       // No TFT work here -- just record it; the loop task applies it.
       if (strcmp(anim, "marquee") == 0)          { mpTestOnePass = true; }   // indicator test, not a mode
-      else if (strcmp(anim, "pipes") == 0)       { pendingMode = MODE_PIPES;       modeDirty = true; }
+      else if (strcmp(anim, "pipes") == 0 || strcmp(anim, "slab") == 0 || strcmp(anim, "slabbed") == 0 || strcmp(anim, "slab1") == 0) { pendingMode = MODE_SLAB; modeDirty = true; }
       else if (strcmp(anim, "salvo") == 0 || strcmp(anim, "artillery") == 0 || strcmp(anim, "cannon") == 0) { pendingMode = MODE_SALVO; modeDirty = true; }
       else if (strcmp(anim, "static") == 0)      { pendingMode = MODE_STATIC;      modeDirty = true; }
       else if (strcmp(anim, "now_playing") == 0) { pendingMode = MODE_NOW_PLAYING; modeDirty = true; }
       else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
-      else if (strcmp(anim, "ant") == 0 || strcmp(anim, "bonsai") == 0 || strcmp(anim, "tree") == 0) { pendingMode = MODE_BONSAI; modeDirty = true; }
+      else if (strcmp(anim, "ant") == 0) { pendingMode = MODE_BONSAI; modeDirty = true; }
+      else if (strcmp(anim, "bonsai") == 0 || strcmp(anim, "tree") == 0) { pendingMode = MODE_DBONSAI; modeDirty = true; }
       else if (strcmp(anim, "fire") == 0)        { pendingMode = MODE_FIRE;        modeDirty = true; }
       else if (strcmp(anim, "knight") == 0 || strcmp(anim, "run") == 0 || strcmp(anim, "jump") == 0) { pendingMode = MODE_KNIGHT; modeDirty = true; }
       else if (strcmp(anim, "radar") == 0 || strcmp(anim, "pet") == 0) { pendingMode = MODE_RADAR; modeDirty = true; }
@@ -790,6 +1261,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "oscilloscope") == 0 || strcmp(anim, "osc") == 0 || strcmp(anim, "snake") == 0) { pendingMode = MODE_OSC; modeDirty = true; }
       else if ((strcmp(anim, "rally") == 0 || strcmp(anim, "pong") == 0))        { pendingMode = MODE_RALLY;        modeDirty = true; }
       else if (strcmp(anim, "eq") == 0 || strcmp(anim, "eye") == 0 || strcmp(anim, "eyeball") == 0) { pendingMode = MODE_EQ; modeDirty = true; }
+      else if (strcmp(anim, "dig") == 0 || strcmp(anim, "deepdig") == 0 || strcmp(anim, "mine") == 0 || strcmp(anim, "gold") == 0) { pendingMode = MODE_DIG; modeDirty = true; }
       else if (strcmp(anim, "cycle") == 0 || strcmp(anim, "random") == 0) { cycleStart = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
@@ -849,7 +1321,10 @@ class EyeSwapServerCallbacks : public BLEServerCallbacks {
 void setup() {
   // N16R8: Native USB-CDC, wait for serial connection
   Serial.begin(115200);
-  while (!Serial) { ; }
+  {                                  // bounded: never hang headless on the bench
+    const unsigned long t0 = millis();
+    while (!Serial && millis() - t0 < 1500) delay(10);
+  }
   delay(100);
   Serial.println("\n\n=== EyeSwap BLE Firmware v1.7 (TFT Basic) ===");
 
@@ -861,9 +1336,12 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_STATIC);
-    if (savedMode == MODE_INDICATOR || (uint8_t)savedMode > (uint8_t)MODE_PIPES)
+    if (savedMode == MODE_INDICATOR || (uint8_t)savedMode > (uint8_t)MODE_DIG)
       savedMode = MODE_STATIC;
     displayMode = savedMode;
+#if SH_FORCE_BOOT
+    displayMode = MODE_SLAB;         // bench: always come up on slabbed
+#endif
     if (prefs.getBool("cycle", false)) {      // restore Random Cycle across reboots
       cycleEnabled = true;
       cycleIndex = 0;
@@ -872,6 +1350,9 @@ void setup() {
       cycleNextAt = millis() + CYCLE_MS;
       Serial.println("[NVS] restored Random Cycle");
     }
+#if SH_FORCE_BOOT
+    cycleEnabled = false;            // bench: no shuffle, stay on the dig build
+#endif
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
     baseG = prefs.getUChar("cg", 0xBF);
@@ -894,6 +1375,18 @@ void setup() {
 // ==========================================
 void loop() {
   bnTick();                                  // the tree grows whether or not it is shown
+#if SH_FORCE_BOOT
+  {
+    static bool shBootDone = false;
+    if (!shBootDone) {                       // bench: come up on the shooter, skip marquee
+      shBootDone = true;
+      mpPhase = MP_ANIM;
+      mpSince = millis();
+      cycleEnabled = false;                  // bench: kill shuffle for the test build
+      setDisplayMode(MODE_SLAB);
+    }
+  }
+#endif
   handleButtons();
   if (cycleStart) {                          // Random Cycle: start now
     cycleStart = false;
@@ -927,6 +1420,25 @@ void loop() {
 }
 
 // ==========================================
+static void setStandardPalette() {
+  lifeSpr.setPaletteColor(0, TFT_BLACK);
+  lifeSpr.setPaletteColor(1, drawColor);
+  lifeSpr.setPaletteColor(2, accentColor);
+  lifeSpr.setPaletteColor(3, tft.color565(40, 150, 235));  // water blue
+  lifeSpr.setPaletteColor(4, tft.color565(10, 55, 105));   // water depth band
+  lifeSpr.setPaletteColor(5, tft.color565(40, 170, 70));    // forest tree
+  lifeSpr.setPaletteColor(6, tft.color565(255, 235, 150));  // flame core
+  lifeSpr.setPaletteColor(7, tft.color565(255, 150, 25));   // flame mid
+  lifeSpr.setPaletteColor(8, tft.color565(225, 70, 10));    // flame deep
+  lifeSpr.setPaletteColor(9, tft.color565(110, 25, 10));    // ember
+  lifeSpr.setPaletteColor(10, tft.color565(45, 40, 38));    // ash
+  lifeSpr.setPaletteColor(11, tft.color565(120, 74, 34));   // bonsai bark
+  lifeSpr.setPaletteColor(12, tft.color565(152, 98, 46));   // bonsai twig
+  lifeSpr.setPaletteColor(13, tft.color565(42, 140, 58));   // bonsai leaf
+  lifeSpr.setPaletteColor(14, tft.color565(78, 180, 84));   // bonsai leaf light
+  lifeSpr.setPaletteColor(15, tft.color565(58, 36, 16));    // bonsai soil
+}
+
 void setupTFT() {
   Serial.println("TFT init starting...");
   
@@ -957,22 +1469,7 @@ void setupTFT() {
   // color. 240x240 @ 4bpp = ~28 KB.
   lifeSpr.setColorDepth(4);
   lifeSpr.createSprite(LIFE_W * LIFE_CELL, LIFE_H * LIFE_CELL);
-  lifeSpr.setPaletteColor(0, TFT_BLACK);
-  lifeSpr.setPaletteColor(1, drawColor);
-  lifeSpr.setPaletteColor(2, accentColor);
-  lifeSpr.setPaletteColor(3, tft.color565(40, 150, 235));  // water blue
-  lifeSpr.setPaletteColor(4, tft.color565(10, 55, 105));   // water depth band
-  lifeSpr.setPaletteColor(5, tft.color565(40, 170, 70));    // forest tree
-  lifeSpr.setPaletteColor(6, tft.color565(255, 235, 150));  // flame core
-  lifeSpr.setPaletteColor(7, tft.color565(255, 150, 25));   // flame mid
-  lifeSpr.setPaletteColor(8, tft.color565(225, 70, 10));    // flame deep
-  lifeSpr.setPaletteColor(9, tft.color565(110, 25, 10));    // ember
-  lifeSpr.setPaletteColor(10, tft.color565(45, 40, 38));    // ash
-  lifeSpr.setPaletteColor(11, tft.color565(120, 74, 34));   // bonsai bark
-  lifeSpr.setPaletteColor(12, tft.color565(152, 98, 46));   // bonsai twig
-  lifeSpr.setPaletteColor(13, tft.color565(42, 140, 58));   // bonsai leaf
-  lifeSpr.setPaletteColor(14, tft.color565(78, 180, 84));   // bonsai leaf light
-  lifeSpr.setPaletteColor(15, tft.color565(58, 36, 16));    // bonsai soil
+  setStandardPalette();
   bnLoad();
   lifeSpriteReady = true;
   
@@ -1119,6 +1616,7 @@ void saveDisplaySettings() {
 
 void setDisplayMode(DisplayMode mode, bool remember) {
   activeMode = mode;
+  if (lifeSpriteReady && mode != MODE_EQ && mode != MODE_DIG) setStandardPalette(); // shooter and dig own their palettes while active
   if (remember) {
     displayMode = mode;
     saveDisplaySettings();
@@ -1134,8 +1632,8 @@ void setDisplayMode(DisplayMode mode, bool remember) {
     tft.setTextSize(4);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(drawColor);
-  } else if (mode == MODE_PIPES) {
-    pipesInit();
+  } else if (mode == MODE_SLAB) {
+    slStart();
   } else if (mode == MODE_SALVO) {
     salvoInit();
   } else if (mode == MODE_STATIC) {
@@ -1144,6 +1642,8 @@ void setDisplayMode(DisplayMode mode, bool remember) {
     boidInit();
   } else if (mode == MODE_BONSAI) {
     bnStart();
+  } else if (mode == MODE_DBONSAI) {
+    dnbStart();
   } else if (mode == MODE_FIRE) {
     fireInit();
   } else if (mode == MODE_KNIGHT) {
@@ -1157,7 +1657,9 @@ void setDisplayMode(DisplayMode mode, bool remember) {
   } else if (mode == MODE_RALLY) {
     rallyInit();
   } else if (mode == MODE_EQ) {
-    eyeInit();
+    shStart();
+  } else if (mode == MODE_DIG) {
+    dgStart();
   }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
@@ -1445,11 +1947,28 @@ void addSplash(float x) {
   }
 }
 
+// Button: one tap feeds a pinch. Two fast taps shake the bowl - the school
+// dives and stays low until the water settles. The first tap still drops food;
+// that is the point, the shake is what scares them off it.
+void fishInteract() {
+  const unsigned long now = millis();
+  if (lastFishTap != 0 && now - lastFishTap <= FISH_DOUBLE_MS) {
+    lastFishTap = 0;
+    frightUntil = now + FRIGHT_MS;
+    waveKick = 4.5f;
+    for (int k = 0; k < 3; k++) addSplash(60.0f + random(120));
+    return;
+  }
+  lastFishTap = now;
+  spawnFishFood();
+}
+
 // Local surface height: two sine components scrolling at different rates so
 // the waterline rolls instead of sitting flat.
 static inline int waveYAt(int x) {
   return WATER_Y + (int)(1.6f * sinf(x * 0.17f + wavePhase)
-                       + 0.9f * sinf(x * 0.41f - wavePhase * 0.7f));
+                       + 0.9f * sinf(x * 0.41f - wavePhase * 0.7f)
+                       + waveKick * sinf(x * 0.55f + wavePhase * 2.0f));
 }
 
 // button 3 drops a live blob in the middle of the dish
@@ -1468,8 +1987,10 @@ void updateBoids() {
 
   wavePhase += 0.09f;
   if (wavePhase > 628.3185f) wavePhase -= 628.3185f;  // keep float precision
+  if (waveKick > 0.05f) waveKick *= 0.94f; else waveKick = 0.0f;
 
-  if (!foodActive && (long)(now - nextFoodAt) >= 0) spawnFishFood();
+  const bool scared = (frightUntil != 0) && (now < frightUntil);
+  if (!scared && !foodActive && (long)(now - nextFoodAt) >= 0) spawnFishFood();
 
   const float cx = 120.0f, cy = 120.0f, maxR = 105.0f;
   for (int i = 0; i < BOID_COUNT; i++) {
@@ -1527,9 +2048,18 @@ void updateBoids() {
     // Stay under the waterline.
     if (b->y < WATER_Y + 6) ay += ((WATER_Y + 6) - b->y) * 0.06f;
 
+    // Shaken bowl: dive for the gravel and spread out sideways. Food is
+    // ignored until the water settles, so a shake really costs a feed.
+    if (scared) {
+      const float targetY = (float)(FISH_BOTTOM_Y + (i % 4) * 5);
+      ay += (targetY - b->y) * 0.02f + 0.10f;
+      ax += ((i & 1) ? 0.06f : -0.06f);
+      if (b->y < WATER_Y + 10) ay += 0.35f;
+    }
+
     // Frenzy: steer hard at the nearest pellet. Speed cap is unchanged, so
     // this is a fair race -- the panic is in the turning, not the top speed.
-    if (foodActive && foodCount > 0) {
+    if (!scared && foodActive && foodCount > 0) {
       float bestD2 = 1e9f; int bestK = -1;
       for (int k = 0; k < foodCount; k++) {
         float fdx = foodX[k] - b->x, fdy = foodY[k] - b->y;
@@ -1548,7 +2078,7 @@ void updateBoids() {
     }
 
     // Occasional leap: only near the surface, more likely during a frenzy.
-    if (b->y < WATER_Y + 12) {
+    if (!scared && b->y < WATER_Y + 12) {
       const int chance = foodActive ? 400 : 1200;
       if (random(chance) == 0) {
         b->jumpT = JUMP_FRAMES;
@@ -2477,595 +3007,247 @@ void updateCoin() {
 
 #endif  // Coin Dozer
 
-// ==== Salvo (MODE_SALVO): WW1 artillery duel, camera parked at the receiving end ====
-// The gunner never sees velocity, wind or curve -- only where the last shell
-// planted its flag -- so each group of three brackets toward the target.
-#define SV_TICK         33
-#define SV_AIM_MS       1000UL
-#define SV_RECOIL_MS    240UL
-#define SV_CUT_MS       260UL
-#define SV_WAIT_MIN     1400UL
-#define SV_WAIT_MAX     2400UL
-#define SV_FALL_MS      520UL
-#define SV_IMPACT_MS    420UL
-#define SV_FLAG_MS      800UL
-#define SV_MATCH_MS     2600UL
-#define SV_WIN_KILLS    3
-#define SV_WIND         14.0f
-#define SV_CURVE        10.0f
-#define SV_SPREAD_MIN   18.0f
-#define SV_SPREAD_MAX   30.0f
-#define SV_HIT_R        7.0f
-#define SV_AIM_GAIN     0.75f
-#define SV_GUN_X        96
-#define SV_GROUND       178
-#define SV_FLAGS        5
+// ==== Salvo (MODE_SALVO): WW1 artillery, player-timed elevation ====
+// Camera stays at the receiving end. Elevation sweeps up and down, so the aim
+// point rides a drawn arc and the landing point slides with it. Three presses
+// store three rounds; then all three fly and land -- around the gun, or on it.
+// No hidden bracketing and no AI gunner: a miss is your thumb, not a dice roll.
+#define SV_TICK_MS     20
+#define SV_RISE_MS     620UL                       // one traverse of the sweep
+#define SV_PAUSE_MS    220UL                       // dwell at each end
+#define SV_CYCLE_MS    (2UL * (SV_RISE_MS + SV_PAUSE_MS))
+#define SV_LAND_MIN    92
+#define SV_LAND_MAX    148
+#define SV_HIT_R       6
+#define SV_SHOTS       3
+#define SV_FLIGHT_MS   480UL
+#define SV_BURST_MS    240UL
+#define SV_GAP_MS      120UL
+#define SV_READ_MS     900UL
+#define SV_GUN_X       96
+#define SV_GROUND      178
+#define SV_TARGET_X    (240 - SV_GUN_X)            // 144
+#define SV_MUZZLE_X    20
+#define SV_WIND        4                           // px of drift, each side
 
-enum SvPhase : uint8_t { SV_AIM, SV_RECOIL, SV_CUT, SV_WAIT, SV_FALL, SV_IMPACT, SV_FLAG, SV_MATCH };
+enum SvPhase : uint8_t { SV_AIM, SV_SALVO, SV_READ };
 
 static SvPhase svPhase = SV_AIM;
-static unsigned long svPhaseAt = 0, svLastTick = 0, svWaitUntil = 0;
-static uint8_t svShooter = 0;            // 0 = primary gun, 1 = secondary gun
-static uint8_t svShotsLeft = 3;
-static uint8_t svKills[2] = {0, 0};
-static float   svBias[2] = {0.0f, 0.0f};
-static float   svOffset = 0.0f;          // this shell's landing, px from the gun
-static float   svSpread = 26.0f;
-static bool    svHit = false;
-static bool    svWrecked[2] = {false, false};
-static int     svDistance = 420;
-static int     svLandX = 144;
-static int16_t svFlagX[SV_FLAGS];
-static uint8_t svFlagSide[SV_FLAGS];
-static uint8_t svFlagN = 0;
-static uint8_t svWinner = 0;
-static bool    svFlagFresh = false;     // newest flag belongs to the shot in flight
-static bool    svTapFire = false;       // button 3 wants the next round now
-
-static uint8_t svInk(uint8_t side) { return side == 0 ? 1 : 2; }
-static uint8_t svOther(uint8_t side) { return side == 0 ? 2 : 1; }
+static unsigned long svPhaseAt = 0, svLastTick = 0, svSweepAt = 0, svRoundAt = 0;
+static uint8_t svAimN = 0;                         // rounds stored this volley
+static uint8_t svRound = 0;                        // round in the air
+static uint8_t svHits = 0;                         // session score
+static int16_t svLandX[SV_SHOTS];
+static float   svElev[SV_SHOTS];
+static bool    svTap = false;
+static bool    svWrecked = false;
 
 static void svSetPhase(SvPhase ph) { svPhase = ph; svPhaseAt = millis(); }
 
-static void svNewDistance() {
-  svDistance = 320 + (int)random(600);
-  const float t = (float)(svDistance - 320) / 600.0f;
-  svSpread = SV_SPREAD_MIN + (SV_SPREAD_MAX - SV_SPREAD_MIN) * t;
+// 0..1 with a dwell at the ends: the reticle slows where it matters instead of
+// whipping past the target at full speed.
+static float svAimV() {
+  const uint32_t p0 = (uint32_t)(millis() - svSweepAt) % SV_CYCLE_MS;
+  if (p0 < SV_RISE_MS) return (float)p0 / (float)SV_RISE_MS;
+  uint32_t p = p0 - SV_RISE_MS;
+  if (p < SV_PAUSE_MS) return 1.0f;
+  p -= SV_PAUSE_MS;
+  if (p < SV_RISE_MS) return 1.0f - (float)p / (float)SV_RISE_MS;
+  return 0.0f;
 }
 
-// --- art -------------------------------------------------------------------
-static void svFlag(int x, uint8_t side) {
-  const int g = SV_GROUND;
-  lifeSpr.fillRect(x, g - 20, 2, 20, svOther(side));
-  lifeSpr.fillRect(x + 2, g - 20, 10, 7, svInk(side));
-  lifeSpr.fillRect(x + 4, g - 18, 6, 2, 0);
+static int svLandFor(float v) {
+  return SV_LAND_MIN + (int)lroundf(v * (float)(SV_LAND_MAX - SV_LAND_MIN));
 }
 
-// the flag rises out of the burst point instead of popping in
-static void svFlagPlant(int x, uint8_t side, float t) {
-  const int g = SV_GROUND;
-  const float tp = t < 0.45f ? t / 0.45f : 1.0f;     // pole rises
-  const int ph = 2 + (int)(18.0f * tp);
-  lifeSpr.fillRect(x, g - ph, 2, ph, svOther(side));
-  if (t > 0.45f) {                                   // cloth unfurls
-    const float tc = t < 0.75f ? (t - 0.45f) / 0.30f : 1.0f;
-    const int cw = 2 + (int)(8.0f * tc);
-    lifeSpr.fillRect(x + 2, g - ph, cw, 7, svInk(side));
-    if (cw >= 8) lifeSpr.fillRect(x + 4, g - ph + 2, 4, 2, 0);
+static float svArcH(float v) { return 28.0f + 42.0f * v; }
+
+static int svArcY(float v, float u) {
+  const float h = svArcH(v);
+  int y = SV_GROUND - (int)(4.0f * h * u * (1.0f - u));
+  return (y < 3) ? 3 : y;
+}
+
+static void svArc(int landX, float v, uint8_t ink) {
+  const int dx = landX - SV_MUZZLE_X;
+  if (dx < 8) return;
+  for (int i = 0; i <= dx; i += 4) {
+    const float u = (float)i / (float)dx;
+    lifeSpr.fillRect(SV_MUZZLE_X + i, svArcY(v, u), 2, 1, ink);
   }
 }
 
-// chevron pointing the way the shell flies
-static void svChevron(int x, int dir) {
-  if (dir > 0) {
-    lifeSpr.fillRect(x, 189, 3, 4, 1);
-    lifeSpr.fillRect(x + 3, 191, 3, 4, 1);
-    lifeSpr.fillRect(x, 195, 3, 4, 1);
-  } else {
-    lifeSpr.fillRect(x + 3, 189, 3, 4, 1);
-    lifeSpr.fillRect(x, 191, 3, 4, 1);
-    lifeSpr.fillRect(x + 3, 195, 3, 4, 1);
-  }
+static void svCross(int landX, uint8_t ink, uint8_t rim) {
+  const int y = SV_GROUND - 8;
+  lifeSpr.fillRect(landX - 5, y, 4, 2, ink);
+  lifeSpr.fillRect(landX + 2, y, 4, 2, ink);
+  lifeSpr.fillRect(landX - 1, y - 5, 2, 4, ink);
+  lifeSpr.fillRect(landX - 1, y + 2, 2, 4, ink);
+  lifeSpr.fillRect(landX - 1, y - 1, 2, 2, rim);
+  lifeSpr.fillRect(landX - 7, SV_GROUND - 4, 3, 2, ink);
+  lifeSpr.fillRect(landX + 5, SV_GROUND - 4, 3, 2, ink);
 }
 
-static void svCannon(int x, uint8_t ink, uint8_t rim, bool faceRight, bool wreck, int recoil) {
+static void svCannon(int x, uint8_t ink, uint8_t rim, bool faceRight, bool wreck) {
   const int g = SV_GROUND;
-  const int cx = x - recoil;
   if (wreck) {
-    lifeSpr.fillRect(cx - 28, g - 9, 54, 9, ink);
-    lifeSpr.fillRect(cx - 12, g - 22, 20, 13, ink);
-    lifeSpr.fillRect(cx + 6, g - 30, 9, 9, rim);
-    lifeSpr.fillRect(cx - 22, g - 26, 7, 6, rim);
+    lifeSpr.fillRect(x - 28, g - 9, 54, 9, ink);
+    lifeSpr.fillRect(x - 12, g - 22, 20, 13, ink);
+    lifeSpr.fillRect(x + 6, g - 30, 9, 9, rim);
+    lifeSpr.fillRect(x - 22, g - 26, 7, 6, rim);
     return;
   }
-  lifeSpr.fillRect(cx - 30, g - 18, 18, 18, ink);      // wheels
-  lifeSpr.fillRect(cx - 27, g - 15, 12, 12, 0);
-  lifeSpr.fillRect(cx + 12, g - 18, 18, 18, ink);
-  lifeSpr.fillRect(cx + 15, g - 15, 12, 12, 0);
-  lifeSpr.fillRect(cx - 34, g - 10, 68, 6, ink);       // trail
-  lifeSpr.fillRect(cx - 18, g - 46, 36, 30, ink);      // shield
-  lifeSpr.fillRect(cx - 13, g - 41, 26, 5, rim);
-  lifeSpr.fillRect(cx - 13, g - 32, 26, 3, rim);
-  for (int i = 0; i < 5; i++) {                        // barrel, stepped to the grid
-    const int bx = faceRight ? (cx + 6 + i * 9) : (cx - 15 - i * 9);
-    lifeSpr.fillRect(bx, g - 50 - i * 7, 9, 7, ink);
+  lifeSpr.fillRect(x - 30, g - 18, 18, 18, ink);
+  lifeSpr.fillRect(x - 27, g - 15, 12, 12, 0);
+  lifeSpr.fillRect(x + 12, g - 18, 18, 18, ink);
+  lifeSpr.fillRect(x + 15, g - 15, 12, 12, 0);
+  lifeSpr.fillRect(x - 34, g - 10, 68, 6, ink);
+  lifeSpr.fillRect(x - 18, g - 46, 36, 30, ink);
+  lifeSpr.fillRect(x - 13, g - 41, 26, 5, rim);
+  lifeSpr.fillRect(x - 13, g - 32, 26, 3, rim);
+  for (int i = 0; i < 5; i++) {
+    const int bx = faceRight ? (x + 6 + i * 9) : (x - 15 - i * 9);
+    lifeSpr.fillRect(bx, g - 45 - i * 6, 8, 6, ink);
   }
+}
+
+static void svMark(int x) {
+  lifeSpr.fillRect(x - 4, SV_GROUND - 2, 9, 2, 2);
+  lifeSpr.fillRect(x - 2, SV_GROUND - 4, 5, 2, 2);
+  lifeSpr.fillRect(x, SV_GROUND - 6, 2, 2, 2);
+}
+
+static void svShell(int landX, float v, float u) {
+  const int dx = landX - SV_MUZZLE_X;
+  const int x = SV_MUZZLE_X + (int)(u * (float)dx);
+  const int y = svArcY(v, u) - 2;
+  lifeSpr.fillRect(x, y, 5, 4, 1);
+  lifeSpr.fillRect(x + 1, y + 1, 3, 2, 2);
+}
+
+static void svBurst(int x) {
+  const int y = SV_GROUND - 8;
+  lifeSpr.fillRect(x - 7, y - 2, 5, 4, 2);
+  lifeSpr.fillRect(x + 3, y - 4, 5, 4, 2);
+  lifeSpr.fillRect(x - 2, y - 10, 4, 5, 2);
+  lifeSpr.fillRect(x - 1, y - 1, 5, 5, 1);
 }
 
 static void svHud() {
-  blockNumber(svKills[0], 62, 28, 2, 1);               // match score
-  blockNumber(svKills[1], 158, 28, 2, 2);
-  lifeSpr.fillRect(112, 34, 10, 2, 1);
-  if (svPhase == SV_MATCH) return;
-
-  // one cluster: range number beside the arrow, arrow points the way the shell flies
-  const bool shellGoesRight = (svPhase == SV_AIM || svPhase == SV_RECOIL);
-  if (shellGoesRight) {
-    blockNumber(svDistance, 92, 190, 2, 1);
-    svChevron(122, 1);
-    svChevron(130, 1);
-  } else {
-    svChevron(96, -1);
-    svChevron(104, -1);
-    blockNumber(svDistance, 114, 190, 2, 1);
+  blockNumber((int)svHits, 62, 26, 2, 1);
+  for (int i = 0; i < SV_SHOTS; i++) {
+    const bool got = (i < (int)svAimN);
+    lifeSpr.fillRect(150 + i * 12, 27, 9, 9, 2);
+    if (got) lifeSpr.fillRect(152 + i * 12, 29, 5, 5, 1);
   }
-  for (int i = 0; i < svShotsLeft; i++)                // rounds left this group
-    lifeSpr.fillRect(162 + i * 8, 191, 5, 5, svInk(svShooter));
 }
 
 static void svRender() {
   lifeSpr.fillSprite(0);
-  if (svPhase == SV_CUT) { lifeSpr.pushSprite(0, 0); return; }
-
   const int g = SV_GROUND;
-  lifeSpr.fillRect(18, g, 204, 2, 1);
-  for (int x = 24; x < 214; x += 14) lifeSpr.fillRect(x, g + 4, 5, 1, 1);
 
-  if (svPhase == SV_MATCH) {
-    const uint8_t ink = svInk(svWinner);
-    lifeSpr.fillRect(38, 92, 164, 52, 0);
-    lifeSpr.fillRect(38, 92, 164, 2, ink);
-    lifeSpr.fillRect(38, 142, 164, 2, ink);
-    for (int i = 0; i < 3; i++) {                      // three flags = the winning kills
-      const int x = 72 + i * 36;
-      lifeSpr.fillRect(x, 104, 2, 20, ink);
-      lifeSpr.fillRect(x + 2, 104, 14, 8, ink);
-      lifeSpr.fillRect(x + 4, 106, 8, 3, 0);
+  lifeSpr.fillRect(10, g, 220, 2, 1);
+  for (int x = 16; x < 226; x += 14) lifeSpr.fillRect(x, g + 4, 5, 1, 1);
+  svCannon(SV_TARGET_X, 2, 1, false, svWrecked);
+
+  if (svPhase == SV_AIM) {
+    const float v = svAimV();
+    const int landX = svLandFor(v);
+    svArc(landX, v, 1);
+    svCross(landX, 1, 2);
+  } else {
+    for (int i = 0; i < SV_SHOTS; i++) {
+      if (svPhase == SV_READ || i < (int)svRound) { svMark(svLandX[i]); continue; }
+      if (i > (int)svRound) continue;
+      const unsigned long el = millis() - svRoundAt;
+      if (el < SV_FLIGHT_MS) {
+        svArc(svLandX[i], svElev[i], 2);
+        svShell(svLandX[i], svElev[i], (float)el / (float)SV_FLIGHT_MS);
+      } else if (el < SV_FLIGHT_MS + SV_BURST_MS) {
+        svBurst(svLandX[i]);
+      } else {
+        svMark(svLandX[i]);
+      }
     }
-    svHud();
-    lifeSpr.pushSprite(0, 0);
-    return;
-  }
-
-  for (int i = 0; i < svFlagN; i++) {
-    if (svPhase == SV_FLAG && svFlagFresh && i == svFlagN - 1)
-      svFlagPlant(svFlagX[i], svFlagSide[i],
-                  (float)(millis() - svPhaseAt) / (float)SV_FLAG_MS);
-    else
-      svFlag(svFlagX[i], svFlagSide[i]);
-  }
-
-  const bool atShooter = (svPhase == SV_AIM || svPhase == SV_RECOIL);
-  const uint8_t gunSide = atShooter ? svShooter : (uint8_t)(1 - svShooter);
-  const uint8_t ink = svInk(gunSide);
-  const uint8_t rim = svOther(gunSide);
-  const int gunX = atShooter ? SV_GUN_X : (240 - SV_GUN_X);
-
-  svCannon(gunX, ink, rim, atShooter, !atShooter && svWrecked[gunSide],
-           (svPhase == SV_RECOIL) ? 12 : 0);
-
-  if (svPhase == SV_RECOIL) {                          // muzzle flash at the barrel tip
-    const int mx = atShooter ? gunX + 44 : gunX - 58;
-    const int my = g - 84;
-    lifeSpr.fillRect(mx, my, 12, 9, rim);
-    lifeSpr.fillRect(mx + 3, my - 5, 6, 6, rim);
-    lifeSpr.fillRect(mx - 5, my + 7, 7, 5, rim);
-  }
-
-  if (svPhase == SV_FALL) {                            // the last half second of the shell
-    const float t = (float)(millis() - svPhaseAt) / (float)SV_FALL_MS;
-    const int sx = svLandX - (int)((1.0f - t) * 26.0f);
-    const int sy = 4 + (int)(t * (float)(g - 10));
-    lifeSpr.fillRect(sx, sy, 4, 10, rim);
-    lifeSpr.fillRect(sx - 1, sy + 3, 6, 5, rim);
-  }
-
-  if (svPhase == SV_IMPACT) {                          // burst, not a fireball
-    const int k = (int)((millis() - svPhaseAt) / 55);
-    const int x = svLandX, y = g - 6;
-    lifeSpr.fillRect(x - 6 - k, y - 4, 4, 4, rim);
-    lifeSpr.fillRect(x + 4 + k, y - 6, 4, 4, rim);
-    lifeSpr.fillRect(x - 2, y - 12 - k, 4, 4, rim);
-    lifeSpr.fillRect(x, y - 2, 6, 6, ink);
   }
 
   svHud();
   lifeSpr.pushSprite(0, 0);
 }
 
-// --- state machine ---------------------------------------------------------
 void salvoInit() {
   randomSeed(esp_random());
-  svKills[0] = svKills[1] = 0;
-  svBias[0] = svBias[1] = 0.0f;
-  svWrecked[0] = svWrecked[1] = false;
-  svFlagN = 0;
-  svFlagFresh = false;
-  svShotsLeft = 3;
-  svShooter = (uint8_t)random(2);
-  svWinner = 0;
-  svOffset = 0.0f;
-  svHit = false;
-  svTapFire = false;
+  svHits = 0;
+  svAimN = 0;
+  svRound = 0;
+  svWrecked = false;
+  svTap = false;
+  for (int i = 0; i < SV_SHOTS; i++) { svLandX[i] = SV_TARGET_X; svElev[i] = 0.5f; }
   svLastTick = millis();
-  svNewDistance();
-  lifeSpr.fillSprite(0);
+  svSweepAt = millis();
   svSetPhase(SV_AIM);
   svRender();
 }
 
-// button 3: skip the lull and fire
-static void svInteract() {
-  if (svPhase == SV_AIM || svPhase == SV_WAIT) svTapFire = true;
-}
-
-static void svFire() {
-  // hidden velocity/wind/curve, plus the gunner's own ranging error and its
-  // accumulated correction from the last flag it saw.
-  svOffset = svBias[svShooter]
-           + ((float)random((int)(-svSpread * 10.0f), (int)(svSpread * 10.0f) + 1) / 10.0f)
-           + ((float)random((int)(-SV_WIND * 10.0f), (int)(SV_WIND * 10.0f) + 1) / 10.0f)
-           + ((float)random((int)(-SV_CURVE * 10.0f), (int)(SV_CURVE * 10.0f) + 1) / 10.0f);
-  svHit = fabsf(svOffset) <= SV_HIT_R;
-  svLandX = (240 - SV_GUN_X) + (int)svOffset;
-  if (svLandX < 26) svLandX = 26;
-  if (svLandX > 208) svLandX = 208;
-}
+// button 3: store the aim point as it sweeps past
+static void svInteract() { if (svPhase == SV_AIM) svTap = true; }
 
 void updateSalvo() {
   const unsigned long now = millis();
-  if (now - svLastTick < SV_TICK) return;
+  if (now - svLastTick < SV_TICK_MS) return;
   svLastTick = now;
 
   switch (svPhase) {
     case SV_AIM:
-      if (svTapFire) { svTapFire = false; svFire(); svSetPhase(SV_RECOIL); }
-      else if (now - svPhaseAt >= SV_AIM_MS) { svFire(); svSetPhase(SV_RECOIL); }
-      break;
-
-    case SV_RECOIL:
-      if (now - svPhaseAt >= SV_RECOIL_MS) svSetPhase(SV_CUT);
-      break;
-
-    case SV_CUT:
-      if (now - svPhaseAt >= SV_CUT_MS) {
-        svWaitUntil = now + SV_WAIT_MIN + random(SV_WAIT_MAX - SV_WAIT_MIN);
-        svSetPhase(SV_WAIT);
-      }
-      break;
-
-    case SV_WAIT:
-      if (svTapFire) { svTapFire = false; svSetPhase(SV_FALL); }
-      else if (now >= svWaitUntil) svSetPhase(SV_FALL);
-      break;
-
-    case SV_FALL:
-      if (now - svPhaseAt >= SV_FALL_MS) svSetPhase(SV_IMPACT);
-      break;
-
-    case SV_IMPACT:
-      if (now - svPhaseAt >= SV_IMPACT_MS) {
-        if (svHit) {
-          svKills[svShooter]++;
-          svWrecked[1 - svShooter] = true;
-          svBias[svShooter] = 0.0f;
-          svFlagFresh = false;
-        } else {
-          svBias[svShooter] -= svOffset * SV_AIM_GAIN;      // bracket from the flag
-          if (svFlagN >= SV_FLAGS) {                        // drop the oldest flag
-            for (int i = 1; i < SV_FLAGS; i++) {
-              svFlagX[i - 1] = svFlagX[i];
-              svFlagSide[i - 1] = svFlagSide[i];
-            }
-            svFlagN = SV_FLAGS - 1;
+      if (svTap) {
+        svTap = false;
+        const float v = svAimV();
+        svElev[svAimN] = v;
+        svLandX[svAimN] = (int16_t)svLandFor(v);
+        svAimN++;
+        if (svAimN >= SV_SHOTS) {
+          for (int i = 0; i < SV_SHOTS; i++) {          // a little drift each
+            int x = svLandX[i] + (int)random(-SV_WIND, SV_WIND + 1);
+            if (x < SV_MUZZLE_X + 14) x = SV_MUZZLE_X + 14;
+            if (x > 232) x = 232;
+            svLandX[i] = (int16_t)x;
           }
-          svFlagX[svFlagN] = (int16_t)svLandX;
-          svFlagSide[svFlagN] = svShooter;
-          svFlagN++;
-          svFlagFresh = true;
-        }
-        svSetPhase(SV_FLAG);
-      }
-      break;
-
-    case SV_FLAG:
-      if (now - svPhaseAt >= SV_FLAG_MS) {
-        if (svHit && svKills[svShooter] >= SV_WIN_KILLS) {
-          svWinner = svShooter;
-          svSetPhase(SV_MATCH);
-        } else if (svHit) {
-          svWrecked[0] = svWrecked[1] = false;
-          svBias[0] = svBias[1] = 0.0f;
-          svFlagN = 0;
-          svFlagFresh = false;
-          svShotsLeft = 3;
-          svShooter = (uint8_t)(1 - svShooter);
-          svNewDistance();
-          svSetPhase(SV_AIM);
-        } else {
-          svShotsLeft--;
-          if (svShotsLeft == 0) {
-            svShotsLeft = 3;
-            svBias[svShooter] = 0.0f;       // fresh group, fresh bracket
-            svShooter = (uint8_t)(1 - svShooter);
-          }
-          if (svShotsLeft == 3) {           // first shot of a group: show the gun
-            svSetPhase(SV_AIM);
-          } else {                          // shots 2-3: fire off-screen, stay on target
-            svFire();
-            svWaitUntil = now + SV_WAIT_MIN + random(SV_WAIT_MAX - SV_WAIT_MIN);
-            svSetPhase(SV_WAIT);
-          }
+          svRound = 0;
+          svRoundAt = now;
+          svSetPhase(SV_SALVO);
         }
       }
       break;
 
-    case SV_MATCH:
-      if (now - svPhaseAt >= SV_MATCH_MS) {
-        svKills[0] = svKills[1] = 0;
-        svWinner = 0;
-        svWrecked[0] = svWrecked[1] = false;
-        svBias[0] = svBias[1] = 0.0f;
-        svFlagN = 0;
-        svFlagFresh = false;
-        svShotsLeft = 3;
-        svShooter = (uint8_t)random(2);
-        svNewDistance();
+    case SV_SALVO: {
+      const unsigned long per = SV_FLIGHT_MS + SV_BURST_MS + SV_GAP_MS;
+      if (now - svRoundAt >= per) {
+        svRoundAt = now;
+        svRound++;
+        if (svRound >= SV_SHOTS) {
+          uint8_t h = 0;
+          for (int i = 0; i < SV_SHOTS; i++)
+            if (abs((int)svLandX[i] - SV_TARGET_X) <= SV_HIT_R) h++;
+          svHits = (uint8_t)(svHits + h);
+          svWrecked = (h > 0);
+          svSetPhase(SV_READ);
+        }
+      }
+      break;
+    }
+
+    case SV_READ:
+      if (now - svPhaseAt >= SV_READ_MS) {
+        svAimN = 0;
+        svRound = 0;
+        svWrecked = false;
+        svSweepAt = now;
         svSetPhase(SV_AIM);
       }
       break;
   }
 
   svRender();
-}
-
-// ==== Pet (MODE_RADAR) ====
-static void tamaLoad() {
-  tamaPrefs.begin("tama", false);
-  tHunger = tamaPrefs.getUChar("hunger", 80);
-  tHappy  = tamaPrefs.getUChar("happy", 70);
-  tEnergy = tamaPrefs.getUChar("energy", 90);
-  tPoops  = tamaPrefs.getUChar("poops", 0);
-  tAgeMin = tamaPrefs.getUShort("age", 0);
-}
-
-static void tamaSave() {
-  tamaPrefs.putUChar("hunger", tHunger);
-  tamaPrefs.putUChar("happy", tHappy);
-  tamaPrefs.putUChar("energy", tEnergy);
-  tamaPrefs.putUChar("poops", tPoops);
-  tamaPrefs.putUShort("age", tAgeMin);
-}
-
-void radarInit() {                     // mode entry
-  randomSeed(esp_random());
-  tamaLoad();
-  lifeSpr.fillSprite(0);
-  const unsigned long now = millis();
-  tLastTick = now;
-  tLastSave = now;
-  tEatUntil = tPlayUntil = tSleepUntil = 0;
-  tBlinkAt = now + 1500 + random(2500);
-  tBlinkUntil = 0;
-  tPoopAt = now + 150000UL + random(120000UL);
-  tHungerAcc = tHappyAcc = tEnergyAcc = tMinuteAcc = 0;
-  tSleeping = false;
-  tOffX = 0; tDir = 1; tWanderAt = now + 4000; tPlayCheckAt = now + 20000;
-  tPoopClearAt = 0;
-}
-
-static void tamaHeart(int x, int y) {
-  lifeSpr.fillRect(x,     y,     2, 2, 2);
-  lifeSpr.fillRect(x + 3, y,     2, 2, 2);
-  lifeSpr.fillRect(x + 1, y + 2, 3, 2, 2);
-}
-
-static void tamaZ(int x, int y, int s) {
-  lifeSpr.fillRect(x, y, 4 * s, s, 2);
-  lifeSpr.fillRect(x + s, y + s, 2 * s, s, 2);
-  lifeSpr.fillRect(x, y + 2 * s, 4 * s, s, 2);
-}
-
-void updateTama() {
-  const unsigned long now = millis();
-  if (now - tLastTick < TAMA_TICK_MS) return;
-  const unsigned long dt = now - tLastTick;
-  tLastTick = now;
-
-  // ---- stats, decayed in real time ----
-  tHungerAcc += (uint32_t)dt;
-  tHappyAcc  += (uint32_t)dt;
-  tEnergyAcc += (uint32_t)dt;
-  tMinuteAcc += (uint32_t)dt;
-  if (tMinuteAcc >= 60000UL) { tMinuteAcc = 0; if (tAgeMin < 65000) tAgeMin++; }
-
-  if (tHungerAcc >= 20000UL) { tHungerAcc = 0; if (tHunger) tHunger--; }
-  if (tHappyAcc >= (tPoops ? 20000UL : 45000UL)) {
-    tHappyAcc = 0;
-    if (tHappy) tHappy--;
-  }
-  if (tEnergyAcc >= (tSleeping ? 2500UL : 12000UL)) {
-    tEnergyAcc = 0;
-    if (tSleeping) { if (tEnergy < 100) tEnergy += 2; }
-    else if (tEnergy) tEnergy--;
-  }
-
-  // ---- sleep cycle ----
-  if (!tSleeping && tEnergy <= 12 && now > tEatUntil && now > tPlayUntil) {
-    tSleeping = true;
-    tSleepUntil = now + 45000UL + random(45000UL);
-  }
-  if (tSleeping && now >= tSleepUntil) tSleeping = false;
-
-  // ---- autonomous foraging: it feeds itself when hungry ----
-  if (!tSleeping && tHunger < 25 && now > tEatUntil) {
-    tEatUntil = now + 2600;
-  }
-  if (tEatUntil && now >= tEatUntil) {
-    tEatUntil = 0;
-    if (tHunger < 100) tHunger = (tHunger > 70) ? 100 : (uint8_t)(tHunger + 30);
-    if (tHappy < 100) tHappy += 5;
-  }
-
-  // ---- poops: it leaves one, then tidies up after itself ----
-  if (now >= tPoopAt && tPoops < 3) {
-    tPoops++;
-    tPoopAt = now + 180000UL + random(180000UL);
-    tPoopClearAt = now + 22000UL;
-  }
-  if (tPoopClearAt && now >= tPoopClearAt) {
-    tPoopClearAt = 0;
-    if (tPoops) tPoops--;
-    if (tPoops) tPoopClearAt = now + 6000UL;
-  }
-
-  // ---- blink ----
-  if (!tBlinkUntil && now >= tBlinkAt) {
-    tBlinkUntil = now + 220;
-  } else if (tBlinkUntil && now >= tBlinkUntil) {
-    tBlinkUntil = 0;
-    tBlinkAt = now + 2000UL + random(4000UL);
-  }
-
-  // ---- wander: it potters around the face on its own ----
-  if (now >= tWanderAt) {
-    tWanderAt = now + 5000UL + random(6000UL);
-    if (random(100) < 45) tDir = (int8_t)(random(2) ? 1 : -1);
-    if (random(100) < 15) tDir = 0;                 // pause and look around
-  }
-  if (!tSleeping) {
-    tOffX += tDir;
-    if (tOffX > 26) { tOffX = 26; tDir = -1; }
-    if (tOffX < -26) { tOffX = -26; tDir = 1; }
-  }
-
-  // ---- spontaneous play: no prompting required ----
-  if (now >= tPlayCheckAt) {
-    tPlayCheckAt = now + 18000UL + random(20000UL);
-    if (!tSleeping && tEnergy > 35 && tHappy < 85) {
-      tPlayUntil = now + 2400UL;
-      tHappy = (tHappy > 80) ? 100 : (uint8_t)(tHappy + 18);
-      if (tEnergy > 10) tEnergy -= 4;
-    }
-  }
-  if (tPlayUntil && now >= tPlayUntil) tPlayUntil = 0;
-
-  // ---- persistence every 5 min ----
-  if (now - tLastSave >= 300000UL) { tLastSave = now; tamaSave(); }
-
-  // ---- draw: chunky pixel goo ----
-  lifeSpr.fillSprite(0);
-  const bool eating  = (tEatUntil != 0);
-  const bool playing = (tPlayUntil != 0);
-  const bool shut    = tSleeping || (tBlinkUntil != 0);
-
-  // Wobble: every sprite row slides sideways a little, phase-lagged down the
-  // body, so the whole mass jiggles like something with no skeleton.
-  tGooPhase += playing ? 0.55f : 0.22f;
-  if (tGooPhase > 6.28318f) tGooPhase -= 6.28318f;
-
-  const int cxPix = tOffX / GOO_CELL;              // wander, in sprite pixels
-  int top = 100;                                   // blob base lands on y=164
-  if (tSleeping) top += 8;                         // settles when it sleeps
-  const int squash = playing ? (int)((now / 160) & 1) : 0;
-
-  // Body: a droplet, widest near the base. Half-widths in sprite pixels.
-  static const uint8_t GOO_HW[16] = {3, 4, 4, 5, 5, 6, 6, 7, 7, 7, 8, 8, 8, 8, 8, 7};
-  for (int r = 0; r < 16; r++) {
-    if (tSleeping && r < 2) continue;              // flattens while asleep
-    const int hw  = GOO_HW[r] + ((squash && r > 10) ? 1 : 0);
-    const int off = gooRowOff(r);
-    lifeSpr.fillRect(120 + (cxPix + off - hw) * GOO_CELL, top + r * GOO_CELL,
-                     (2 * hw + 1) * GOO_CELL, GOO_CELL, 1);
-  }
-
-  // Puddle: it always sits in a little of its own goo, and drips rejoin it.
-  const int puddleY = top + 16 * GOO_CELL;
-  const int puddleHw = 9 + (tPuddlePulse ? 1 : 0) + (playing ? 1 : 0);
-  lifeSpr.fillRect(120 + (cxPix - puddleHw) * GOO_CELL, puddleY,
-                   (2 * puddleHw + 1) * GOO_CELL, GOO_CELL, 1);
-  lifeSpr.fillRect(120 + (cxPix - puddleHw + 2) * GOO_CELL, puddleY + GOO_CELL,
-                   (2 * puddleHw - 3) * GOO_CELL, GOO_CELL, 1);
-  if (tPuddlePulse) tPuddlePulse--;
-
-  // Falling bead off one flank.
-  if (tDripRow >= 0) {
-    tDripRow++;
-    if (tDripRow >= 16) { tDripRow = -1; tPuddlePulse = 8; }
-    else {
-      const int dhw = GOO_HW[tDripRow];
-      lifeSpr.fillRect(120 + (cxPix + tDripSide * dhw) * GOO_CELL,
-                       top + tDripRow * GOO_CELL, GOO_CELL, GOO_CELL, 1);
-    }
-  } else if (random(240) == 0 && !tSleeping) {
-    tDripRow = 9;
-    tDripSide = (int8_t)(random(2) ? 1 : -1);
-  }
-
-  // Eyes: two dark blocks punched straight through the goo, 2x2 sprite pixels.
-  const int eyeOff = gooRowOff(5);
-  const int eyeY   = top + 4 * GOO_CELL;
-  const int eyeH   = shut ? GOO_CELL : 2 * GOO_CELL;
-  const int eyeL   = 120 + (cxPix + eyeOff - 4) * GOO_CELL;
-  const int eyeR   = 120 + (cxPix + eyeOff + 2) * GOO_CELL;
-  lifeSpr.fillRect(eyeL, eyeY, 2 * GOO_CELL, eyeH, 0);
-  lifeSpr.fillRect(eyeR, eyeY, 2 * GOO_CELL, eyeH, 0);
-  if (!shut) {                                   // one glint pixel each
-    lifeSpr.fillRect(eyeL, eyeY, GOO_CELL, GOO_CELL, 2);
-    lifeSpr.fillRect(eyeR, eyeY, GOO_CELL, GOO_CELL, 2);
-  }
-
-  // Mouth: 2-4 sprite pixels, no curves.
-  const int mOff = gooRowOff(8);
-  const int mx   = 120 + (cxPix + mOff) * GOO_CELL;
-  const int my   = top + 8 * GOO_CELL;
-  if (eating || tHunger < 25) {                  // open maw
-    lifeSpr.fillRect(mx - GOO_CELL, my, 2 * GOO_CELL, 2 * GOO_CELL, 0);
-  } else if (tHappy >= 70) {                     // corners up
-    lifeSpr.fillRect(mx - 2 * GOO_CELL, my - GOO_CELL, GOO_CELL, GOO_CELL, 0);
-    lifeSpr.fillRect(mx, my, GOO_CELL, GOO_CELL, 0);
-    lifeSpr.fillRect(mx + GOO_CELL, my - GOO_CELL, GOO_CELL, GOO_CELL, 0);
-  } else if (tHappy < 30) {                      // corners down
-    lifeSpr.fillRect(mx, my, GOO_CELL, GOO_CELL, 0);
-    lifeSpr.fillRect(mx - 2 * GOO_CELL, my + GOO_CELL, GOO_CELL, GOO_CELL, 0);
-    lifeSpr.fillRect(mx + GOO_CELL, my + GOO_CELL, GOO_CELL, GOO_CELL, 0);
-  } else {
-    lifeSpr.fillRect(mx - GOO_CELL, my, 2 * GOO_CELL, GOO_CELL, 0);
-  }
-
-  // Food while eating: a chunky pellet it leans toward.
-  if (eating) {
-    const int fy = 120 + ((now / 200) & 1) * GOO_CELL;
-    lifeSpr.fillRect(120 + (cxPix + 12) * GOO_CELL, fy, 2 * GOO_CELL, 2 * GOO_CELL, 5);
-  }
-  // Hearts when content.
-  if (tHappy >= 70 && !tSleeping && ((now / 900) & 1)) {
-    tamaHeart(150, top - 16);
-    tamaHeart(166, top - 34);
-  }
-  // Zzz while asleep.
-  if (tSleeping) {
-    tamaZ(150, top - 16, 2);
-    tamaZ(170, top - 36, 1);
-  }
-  // Poops: squat pixel clumps on the floor.
-  for (int i = 0; i < tPoops; i++) {
-    const int px = 88 + i * 20;
-    lifeSpr.fillRect(px, 184, 3 * GOO_CELL, 2 * GOO_CELL, 7);
-    lifeSpr.fillRect(px + GOO_CELL, 180, GOO_CELL, GOO_CELL, 7);
-  }
-
-  lifeSpr.pushSprite(0, 0);
 }
 
 // ==== Crystal (MODE_STARFIELD): diffusion-limited aggregation ====
@@ -3462,6 +3644,8 @@ void updateRally() {
   lifeSpr.pushSprite(0, 0);
 }
 
+// ==== Eye (MODE_EQ): parked — quickdraw shooter took the slot ====
+#if 0
 // ==== Eye (MODE_EQ): a pixel-art eyeball that gets bored ====
 // Everything lands on a 4px cell grid, same chunky language as the rest of the
 // roster. The eyeball drifts around slowly when it has nothing to look at, and
@@ -3645,22 +3829,239 @@ void updateEye() {
 
   eyeRender();
 }
+#endif  // parked eye
+
+// ==== Quickdraw shooter (MODE_EQ): AI demo duel, one-button player mode ====
+// DeepSeek-written module (sh-ds1), six-shot cylinders with misses. Boots into
+// the AI-vs-AI demo; a tap resets into a player game; 60s idle returns to demo.
+// Button 3 tap = your gun.
+static uint8_t shPrev[60 * 60];
+static unsigned long shLast = 0;
+static bool shReady = false;
+
+static void shPalette() {
+  lifeSpr.setPaletteColor(3,  tft.color565(255, 220, 80));   // muzzle flash
+  lifeSpr.setPaletteColor(4,  tft.color565(255, 255, 180));  // tracer
+  lifeSpr.setPaletteColor(5,  tft.color565(150, 140, 130));  // dust
+  lifeSpr.setPaletteColor(11, tft.color565(45, 45, 75));     // dusk sky
+  lifeSpr.setPaletteColor(12, tft.color565(230, 225, 240));  // sky flash
+  lifeSpr.setPaletteColor(13, tft.color565(110, 85, 60));    // ground
+  lifeSpr.setPaletteColor(14, tft.color565(70, 60, 70));     // building/mesa
+  lifeSpr.setPaletteColor(15, tft.color565(250, 240, 200));  // HUD/text
+}
+
+static void shBlit(int x, int y, uint8_t slot) {
+  lifeSpr.fillRect(x * 4, y * 4, 4, 4, slot);
+}
+
+static void shRepaintAll() {
+  lifeSpr.fillSprite(0);
+  for (int y = 0; y < 60; y++)
+    for (int x = 0; x < 60; x++) {
+      uint8_t s = csCell(x, y);
+      shPrev[y * 60 + x] = s;
+      if (s) shBlit(x, y, s);
+    }
+  lifeSpr.pushSprite(0, 0);
+}
+
+static void shStart() {
+  shPalette();
+  csInit((uint32_t)esp_random());
+  int self = csSelfCheck();
+  shLast = millis();
+  shReady = true;
+  shRepaintAll();
+  Serial.printf("[SH] new duel (self=%d)\n", self);
+}
+
+static void shUpdate() {
+  if (!shReady) return;
+  unsigned long now = millis();
+  uint32_t dt = (uint32_t)(now - shLast);
+  shLast = now;
+  if (dt > 250) dt = 250;            // never fast-forward after a hitch
+  csTick(dt);
+  bool dirty = false;
+  for (int y = 0; y < 60; y++)
+    for (int x = 0; x < 60; x++) {
+      uint8_t s = csCell(x, y);
+      int i = y * 60 + x;
+      if (s == shPrev[i]) continue;
+      shPrev[i] = s;
+      shBlit(x, y, s);
+      dirty = true;
+    }
+  if (dirty) lifeSpr.pushSprite(0, 0);
+}
+
+// ==== Deep Dig (MODE_DIG): gold-mine push-your-luck, hard hat with feet ====
+// DeepSeek-written module (dg-ds1). Tap = pick swing; cracks spread on their
+// own clock; stop ~1s and he climbs out and banks; cave-in = soft restart.
+static uint8_t dgPrev[60 * 60];
+static unsigned long dgLast = 0;
+static bool dgReady = false;
+
+static void dgPalette() {
+  lifeSpr.setPaletteColor(1,  tft.color565(255, 205, 60));   // hard hat
+  lifeSpr.setPaletteColor(2,  tft.color565(255, 185, 20));   // gold/vein
+  lifeSpr.setPaletteColor(3,  tft.color565(255, 245, 190));  // lamp/flash
+  lifeSpr.setPaletteColor(4,  tft.color565(48, 40, 34));     // crack
+  lifeSpr.setPaletteColor(5,  tft.color565(168, 130, 92));   // dust
+  lifeSpr.setPaletteColor(11, tft.color565(72, 50, 34));     // rock dark
+  lifeSpr.setPaletteColor(12, tft.color565(102, 73, 48));    // rock mid
+  lifeSpr.setPaletteColor(13, tft.color565(130, 95, 60));    // rock light
+  lifeSpr.setPaletteColor(14, tft.color565(255, 215, 70));   // vein-rich
+  lifeSpr.setPaletteColor(15, tft.color565(240, 228, 196));  // HUD/text
+}
+
+static void dgBlit(int x, int y, uint8_t slot) {
+  lifeSpr.fillRect(x * 4, y * 4, 4, 4, slot);
+}
+
+static void dgRepaintAll() {
+  lifeSpr.fillSprite(0);
+  for (int y = 0; y < 60; y++)
+    for (int x = 0; x < 60; x++) {
+      uint8_t s = dgCell(x, y);
+      dgPrev[y * 60 + x] = s;
+      if (s) dgBlit(x, y, s);
+    }
+  lifeSpr.pushSprite(0, 0);
+}
+
+static void dgStart() {
+  dgPalette();
+  dgInit((uint32_t)esp_random());
+  int self = dgSelfCheck();
+  dgLast = millis();
+  dgReady = true;
+  dgRepaintAll();
+  Serial.printf("[DG] new mine (self=%d)\n", self);
+}
+
+static void dgUpdate() {
+  if (!dgReady) return;
+  unsigned long now = millis();
+  uint32_t dt = (uint32_t)(now - dgLast);
+  dgLast = now;
+  if (dt > 250) dt = 250;            // never fast-forward after a hitch
+  dgTick(dt);
+  bool dirty = false;
+  for (int y = 0; y < 60; y++)
+    for (int x = 0; x < 60; x++) {
+      uint8_t s = dgCell(x, y);
+      int i = y * 60 + x;
+      if (s == dgPrev[i]) continue;
+      dgPrev[i] = s;
+      dgBlit(x, y, s);
+      dirty = true;
+    }
+  if (dirty) lifeSpr.pushSprite(0, 0);
+}
+
+// ==== Slabbed (MODE_SLAB): horizontal hard-rock push-your-luck ====
+// slab.cpp is the spec module from .scratch/bonsai-proto/m_slab1. The pod feeds
+// it real millisecond deltas and blits its 60x60 cell grid at 4 px/cell.
+static uint8_t slPrev[60 * 60];
+static unsigned long slLast = 0;
+static uint32_t slAcc = 0;
+static unsigned long slLogAt = 0;
+static bool slReady = false;
+
+static void slPalette() {
+  lifeSpr.setPaletteColor(0,  TFT_BLACK);
+  lifeSpr.setPaletteColor(1,  drawColor);                     // loader body
+  lifeSpr.setPaletteColor(2,  tft.color565(255, 178, 20));    // ore
+  lifeSpr.setPaletteColor(3,  tft.color565(255, 250, 210));   // scoop flash
+  lifeSpr.setPaletteColor(4,  tft.color565(26, 20, 16));      // cracks / tracks
+  lifeSpr.setPaletteColor(5,  tft.color565(168, 130, 92));    // dust
+  lifeSpr.setPaletteColor(11, tft.color565(70, 52, 38));      // rock dark
+  lifeSpr.setPaletteColor(12, tft.color565(105, 78, 55));     // rock mid
+  lifeSpr.setPaletteColor(13, tft.color565(140, 108, 76));    // rock light
+  lifeSpr.setPaletteColor(14, tft.color565(235, 96, 18));     // ore-rich
+  lifeSpr.setPaletteColor(15, accentColor);                   // HUD / text
+}
+
+static void slBlit(int x, int y, uint8_t slot) {
+  lifeSpr.fillRect(x * 4, y * 4, 4, 4, slot);
+}
+
+static void slRepaintAll() {
+  lifeSpr.fillSprite(0);
+  for (int y = 0; y < 60; y++)
+    for (int x = 0; x < 60; x++) {
+      uint8_t s = sbCellAt(x, y);
+      slPrev[y * 60 + x] = s;
+      if (s) slBlit(x, y, s);
+    }
+  lifeSpr.pushSprite(0, 0);
+}
+
+static void slStart() {
+  slPalette();
+  sbInit((uint32_t)esp_random());
+  slLast = millis();
+  slAcc = 0;
+  slLogAt = millis();
+  slReady = true;
+  slRepaintAll();
+  Serial.println("[SLAB] new run");
+}
+
+static void slUpdate() {
+  if (!slReady) return;
+  const unsigned long now = millis();
+  uint32_t dt = (uint32_t)(now - slLast);
+  slLast = now;
+  if (dt > 250) dt = 250;            // never fast-forward after a hitch
+  slAcc += dt;
+  if (slAcc < 25) return;            // ~40 fps grid refresh
+  const uint32_t step = slAcc;
+  slAcc = 0;
+  sbTick(step);
+  if (now - slLogAt >= 5000UL) {
+    int d, h, b, c, st, ai, vi;
+    sbStats(&d, &h, &b, &c, &st, &ai, &vi);
+    Serial.printf("[SLAB] d=%d h=%d b=%d c=%d s=%d ai=%d v=%d\n",
+                  d, h, b, c, st, ai, vi);
+    slLogAt = now;
+  }
+  bool dirty = false;
+  for (int y = 0; y < 60; y++)
+    for (int x = 0; x < 60; x++) {
+      uint8_t s = sbCellAt(x, y);
+      int i = y * 60 + x;
+      if (s == slPrev[i]) continue;
+      slPrev[i] = s;
+      slBlit(x, y, s);
+      dirty = true;
+    }
+  if (dirty) lifeSpr.pushSprite(0, 0);
+}
+
+static void slInteract() {
+  sbInteract();
+}
+
 void renderDisplay() {
   switch (activeMode) {
     case MODE_INDICATOR:   updateMarquee(); break;
     case MODE_SALVO:       updateSalvo(); break;
-    case MODE_PIPES:       updatePipes(); break;
+    case MODE_SLAB:        slUpdate(); break;
     case MODE_STATIC:      updateLife(); break;
     case MODE_NOW_PLAYING: updateNowPlaying(); break;
     case MODE_BOIDS:       updateBoids(); break;
     case MODE_BONSAI:      updateBonsai(); break;
+    case MODE_DBONSAI:     dnbUpdate(); break;
     case MODE_FIRE:        updateFire(); break;
     case MODE_KNIGHT:      updateKnight(); break;
     case MODE_RADAR:       updateTama(); break;
     case MODE_STARFIELD:   updateDla(); break;
     case MODE_OSC:         updateSnake(); break;
     case MODE_RALLY:        updateRally(); break;
-    case MODE_EQ:          updateEye(); break;
+    case MODE_EQ:          shUpdate(); break;
+    case MODE_DIG:         dgUpdate(); break;
   }
 }
 
@@ -3712,29 +4113,21 @@ void setupBLE() {
 // Button 3 short-press: one interaction, chosen by whatever is on screen.
 // Priority for the pet is poop > feed > play; other modes define their own.
 static void tamaInteract() {
-  const unsigned long now = millis();
-  if (tSleeping) { tSleeping = false; tSleepUntil = 0; }
-  if (tPoops > 0) {
-    tPoops--;
-    tPoopClearAt = (tPoops > 0) ? now + 6000UL : 0;
-    if (tHappy < 100) tHappy += 4;
-  } else if (tHunger < 90) {
-    tEatUntil = now + 2600UL;
-  } else {
-    tPlayUntil = now + 2400UL;
-    tHappy = (tHappy > 84) ? 100 : (uint8_t)(tHappy + 16);
-    if (tEnergy > 8) tEnergy -= 4;
-  }
-  tamaSave();
+  tamaTap();      // single = clean/feed, double = play, after the tap window
 }
 
 static void modeInteract() {
   switch (activeMode) {
     case MODE_RADAR:  tamaInteract(); break;
+    case MODE_BOIDS:  fishInteract(); break;
     case MODE_BONSAI: bnInteract();   break;
+    case MODE_DBONSAI: dnbInteract(); break;
     case MODE_STATIC: lifeInteract(); break;
     case MODE_KNIGHT: krInteract();   break;
     case MODE_SALVO:  svInteract();   break;
+    case MODE_EQ:     csInteract();   break;
+    case MODE_DIG:    dgInteract();   break;
+    case MODE_SLAB:   slInteract();    break;
     default: break;                   // Fire, Lissajous, DLA, Rally: display only
   }
 }
