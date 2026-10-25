@@ -38,21 +38,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Idle animation mode
   String _idleAnimation = 'static'; // firmware ids; marquee is a link indicator, not a mode
   
+  // Every id here is a string the firmware accepts today. Category is only for
+  // layout -- the pod does not care.
+  static const List<String> _idleCategories = [
+    'Games',
+    'Pets',
+    'Living',
+    'Utility',
+  ];
+
   final List<Map<String, dynamic>> _idleAnimations = [
-    {'id': 'salvo', 'name': 'Salvo', 'icon': Icons.flag},
-    {'id': 'static', 'name': 'Game of Life', 'icon': Icons.grain},
-    {'id': 'now_playing', 'name': 'Now Playing', 'icon': Icons.music_note},
-    {'id': 'boids', 'name': 'Boids', 'icon': Icons.flight},
-    {'id': 'ant', 'name': "Langton's Ant", 'icon': Icons.grid_on},
-    {'id': 'fire', 'name': 'Fire', 'icon': Icons.local_fire_department},
-    {'id': 'knight', 'name': 'Knight Run', 'icon': Icons.directions_run},
-    {'id': 'pipes', 'name': 'Pipes', 'icon': Icons.plumbing},
-    {'id': 'pet', 'name': 'Pet', 'icon': Icons.pets},
-    {'id': 'crystal', 'name': 'Crystal', 'icon': Icons.diamond},
-    {'id': 'snake', 'name': 'Snake', 'icon': Icons.videogame_asset},
-    {'id': 'rally', 'name': 'Rally', 'icon': Icons.sports_tennis},
-    {'id': 'eye', 'name': 'Eye', 'icon': Icons.remove_red_eye},
-    {'id': 'cycle', 'name': 'Random Cycle', 'icon': Icons.shuffle},
+    // --- Games: the button does something ---
+    {'id': 'salvo', 'name': 'Salvo', 'category': 'Games', 'icon': Icons.flag},
+    {'id': 'knight', 'name': 'Knight Run', 'category': 'Games', 'icon': Icons.directions_run},
+    {'id': 'snake', 'name': 'Snake', 'category': 'Games', 'icon': Icons.videogame_asset},
+    {'id': 'rally', 'name': 'Rally', 'category': 'Games', 'icon': Icons.sports_tennis},
+    {'id': 'eye', 'name': 'Quickdraw', 'category': 'Games', 'icon': Icons.adjust},
+    {'id': 'dig', 'name': 'Deep Dig', 'category': 'Games', 'icon': Icons.terrain},
+    {'id': 'slab', 'name': 'Slabbed', 'category': 'Games', 'icon': Icons.layers},
+    // --- Pets: a persistent creature, one or two clicks ---
+    {'id': 'pet', 'name': 'Goo Pet', 'category': 'Pets', 'icon': Icons.pets},
+    {'id': 'boids', 'name': 'Fish', 'category': 'Pets', 'icon': Icons.water},
+    // --- Living systems: no input, they just grow ---
+    {'id': 'static', 'name': 'Game of Life', 'category': 'Living', 'icon': Icons.grain},
+    {'id': 'fire', 'name': 'Fire', 'category': 'Living', 'icon': Icons.local_fire_department},
+    {'id': 'ant', 'name': 'Bonsai Wild', 'category': 'Living', 'icon': Icons.park},
+    {'id': 'bonsai', 'name': 'Bonsai Trained', 'category': 'Living', 'icon': Icons.forest},
+    {'id': 'crystal', 'name': 'Crystal', 'category': 'Living', 'icon': Icons.diamond},
+    // --- Utility ---
+    {'id': 'now_playing', 'name': 'Now Playing', 'category': 'Utility', 'icon': Icons.music_note},
+    {'id': 'cycle', 'name': 'Random Cycle', 'category': 'Utility', 'icon': Icons.shuffle},
   ];
 
   @override
@@ -551,35 +566,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(color: Colors.white54, fontSize: 12),
                   ),
                   const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _idleAnimations.map((anim) {
-                      final isSelected = _idleAnimation == anim['id'];
-                      return ChoiceChip(
-                        label: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              anim['icon'] as IconData,
-                              size: 16,
-                              color: isSelected ? Colors.black : Colors.white54,
+                  for (final cat in _idleCategories)
+                    if (_idleAnimations.any((a) => a['category'] == cat)) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10, bottom: 6),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            cat.toUpperCase(),
+                            style: const TextStyle(
+                              color: Colors.white38,
+                              fontSize: 10,
+                              letterSpacing: 1.2,
                             ),
-                            const SizedBox(width: 6),
-                            Text(anim['name'] as String),
-                          ],
+                          ),
                         ),
-                        selected: isSelected,
-                        onSelected: (_) => _saveIdleAnimation(anim['id'] as String),
-                        backgroundColor: const Color(0xFF0A0A0A),
-                        selectedColor: const Color(0xFFFFAA00),
-                        labelStyle: TextStyle(
-                          color: isSelected ? Colors.black : Colors.white,
-                          fontSize: 12,
-                        ),
-                      );
-                    }).toList(),
-                  ),
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _idleAnimations
+                            .where((a) => a['category'] == cat)
+                            .map((anim) {
+                          final isSelected = _idleAnimation == anim['id'];
+                          return ChoiceChip(
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  anim['icon'] as IconData,
+                                  size: 16,
+                                  color: isSelected ? Colors.black : Colors.white54,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(anim['name'] as String),
+                              ],
+                            ),
+                            selected: isSelected,
+                            onSelected: (_) =>
+                                _saveIdleAnimation(anim['id'] as String),
+                            backgroundColor: const Color(0xFF0A0A0A),
+                            selectedColor: const Color(0xFFFFAA00),
+                            labelStyle: TextStyle(
+                              color: isSelected ? Colors.black : Colors.white,
+                              fontSize: 12,
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ],
                 ],
               ),
             ),
