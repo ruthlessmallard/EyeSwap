@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/round_display.dart';
 import '../widgets/chunky_button.dart';
@@ -113,6 +115,20 @@ class _ControllerScreenState extends State<ControllerScreen> {
     await _refreshPermissionState();
   }
 
+  /// Five minutes without a pod: leave the task, then kill the process so the
+  /// radio, the scanners and the wake locks all stop. The pod is untouched --
+  /// it keeps playing and keeps advertising, so the next tag tap relaunches
+  /// this app and the hunt starts over.
+  void _handleSearchExpired() {
+    if (!mounted) {
+      exit(0);
+      return;
+    }
+    _updateDisplay('EYESWAP', 'NO POD');
+    SystemNavigator.pop();
+    Timer(const Duration(milliseconds: 300), () => exit(0));
+  }
+
   @override
   void dispose() {
     _nowPlayingTimer?.cancel();
@@ -121,6 +137,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
   }
 
   void _initializeBle() async {
+    _bleHandler.onSearchExpired = _handleSearchExpired;
     await _bleHandler.initialize();
     _bleHandler.onDeviceConnected = () {
       _updateDisplay('EYESWAP', 'CONNECTED');

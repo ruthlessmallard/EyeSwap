@@ -16,6 +16,17 @@ class BleHandler {
   bool _connecting = false;
   StreamSubscription<List<ScanResult>>? _scanSub;
   StreamSubscription<BluetoothConnectionState>? _connStateSub;
+
+  // Five-minute hunt. The app used to scan once and then sit on "SCANNING"
+  // forever until a force-stop; now it keeps re-scanning and, if the pod never
+  // turns up, asks the UI to shut the app down so the radio and the wake locks
+  // stop costing battery.
+  static const Duration searchWindow = Duration(minutes: 5);
+  static const Duration _searchTickPeriod = Duration(seconds: 5);
+  DateTime? _searchStartedAt;
+  Timer? _searchTick;
+  bool _gaveUp = false;
+  VoidCallback? onSearchExpired;
   
   // Callbacks - wire to button handlers
   VoidCallback? onButton1Press;
@@ -38,6 +49,43 @@ class BleHandler {
     } catch (e) {
       developer.log('BLE init failed: $e', name: 'BleHandler');
     }
+    beginSearch();
+  }
+
+  /// Start (or restart) the five-minute hunt for the pod.
+  void beginSearch() {
+    _searchStartedAt = DateTime.now();
+    _gaveUp = false;
+    _searchTick?.cancel();
+    _searchTick = Timer.periodic(_searchTickPeriod, (_) => _searchTickBody());
+    startScanning();
+  }
+
+  void _searchTickBody() {
+    if (_device != null || _connecting) return;   // linked, or mid-handshake
+
+    final started = _searchStartedAt;
+    if (started != null &&
+        DateTime.now().difference(started) >= searchWindow) {
+      _searchTick?.cancel();
+      _searchTick = null;
+      if (!_gaveUp) {
+        _gaveUp = true;
+        developer.log('No pod in five minutes - stopping the app',
+            name: 'BleHandler');
+        onSearchExpired?.call();
+      }
+      return;
+    }
+    startScanning();
+  }
+
+  /// A live link resets the clock, so a blip never kills the session.
+  void _searchSucceeded() {
+    _searchStartedAt = null;
+    _gaveUp = false;
+    _searchTick?.cancel();
+    _searchTick = null;
   }
 
   Future<void> startScanning() async {
@@ -82,7 +130,7 @@ class BleHandler {
         _configCharacteristic = null;
         onDeviceDisconnected?.call();
         developer.log('EyeSwap disconnected - auto-rescanning', name: 'BleHandler');
-        _scheduleRescan();
+        beginSearch();
       }
     });
   }
@@ -119,6 +167,7 @@ class BleHandler {
 
       if (_commandCharacteristic != null) {
         _watchConnectionState(device);
+        _searchSucceeded();
         onDeviceConnected?.call();
         developer.log('Connected to EyeSwap ESP32', name: 'BleHandler');
       } else {
