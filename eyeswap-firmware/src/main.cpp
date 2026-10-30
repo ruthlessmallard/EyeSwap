@@ -151,6 +151,7 @@ volatile bool cycleStart = false;      // BLE asked for Random Cycle
 static bool cycleEnabled = false;      // loop-owned
 static int cycleIndex = 0;             // current slot in CYCLE_MODES
 static unsigned long cycleNextAt = 0;  // millis() of next hop
+static unsigned long cycleLastHop = 0; // millis() of the last real hop (stall watchdog)
 volatile bool configDirty = false;
 volatile bool npDirty = false;
 
@@ -1245,6 +1246,12 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
     const char* type = doc["type"] | "";
     if (strcmp(type, "mode") == 0) {
       const char* anim = doc["animation"] | "";
+      // The app re-pushes its saved idle animation on every connect. That is a
+      // resync, not a choice -- it must not knock the pod out of Random Cycle
+      // (which is persisted, so it would stay dead across reboots).
+      const bool resync = doc["resync"] | false;
+      if (resync && cycleEnabled) return;
+      if (cycleEnabled && (strcmp(anim, "cycle") == 0 || strcmp(anim, "random") == 0)) return;
       // No TFT work here -- just record it; the loop task applies it.
       if (strcmp(anim, "marquee") == 0)          { mpTestOnePass = true; }   // indicator test, not a mode
       else if (strcmp(anim, "pipes") == 0 || strcmp(anim, "slab") == 0 || strcmp(anim, "slabbed") == 0 || strcmp(anim, "slab1") == 0) { pendingMode = MODE_SLAB; modeDirty = true; }
@@ -1326,7 +1333,7 @@ void setup() {
     while (!Serial && millis() - t0 < 1500) delay(10);
   }
   delay(100);
-  Serial.println("\n\n=== EyeSwap BLE Firmware v1.7 (TFT Basic) ===");
+  Serial.println("\n\n=== EyeSwap BLE Firmware v1.8 (TFT Basic) ===");
 
   setupTFT();
   setupButtons();
@@ -1348,6 +1355,7 @@ void setup() {
       for (int i = 0; i < CYCLE_N; i++)
         if (CYCLE_MODES[i] == savedMode) { cycleIndex = i; break; }
       cycleNextAt = millis() + CYCLE_MS;
+      cycleLastHop = millis();
       Serial.println("[NVS] restored Random Cycle");
     }
 #if SH_FORCE_BOOT
@@ -1394,15 +1402,31 @@ void loop() {
     cycleIndex = (int)random(CYCLE_N);
     setDisplayMode(CYCLE_MODES[cycleIndex]);
     cycleNextAt = millis() + CYCLE_MS;
+    cycleLastHop = millis();
   }
   if (modeDirty) { modeDirty = false; cycleEnabled = false; setDisplayMode(pendingMode, true); }
   marqueeTick();
-  if (cycleEnabled && mpPhase == MP_ANIM && millis() >= cycleNextAt) {   // hop to a fresh animation
+  if (cycleEnabled && mpPhase == MP_ANIM && (long)(millis() - cycleNextAt) >= 0) {   // hop to a fresh animation
     int k = cycleIndex;
     while (CYCLE_N > 1 && k == cycleIndex) k = (int)random(CYCLE_N);
     cycleIndex = k;
     setDisplayMode(CYCLE_MODES[cycleIndex]);
     cycleNextAt = millis() + CYCLE_MS;
+    cycleLastHop = millis();
+  }
+  // Stall watchdog: cycling must never sit on one animation for good. If the
+  // marquee phase machine is wedged (or anything else freezes the hop), force
+  // the display back to the animation phase and hop.
+  if (cycleEnabled && (long)(millis() - cycleLastHop) > (long)(2UL * CYCLE_MS)) {
+    Serial.println("[CYCLE] watchdog: no hop in 20 min, forcing one");
+    mpPhase = MP_ANIM;
+    mpSince = millis();
+    int k = cycleIndex;
+    while (CYCLE_N > 1 && k == cycleIndex) k = (int)random(CYCLE_N);
+    cycleIndex = k;
+    setDisplayMode(CYCLE_MODES[cycleIndex]);
+    cycleNextAt = millis() + CYCLE_MS;
+    cycleLastHop = millis();
   }
   if (configDirty) {
     configDirty = false;
@@ -1678,6 +1702,7 @@ static void applyChosenMode() {
   if (cycleEnabled) {
     setDisplayMode(pickRandomAnim());
     cycleNextAt = millis() + CYCLE_MS;
+    cycleLastHop = millis();
   } else if (!deviceConnected && displayMode == MODE_NOW_PLAYING) {
     setDisplayMode(pickRandomAnim());
   } else {

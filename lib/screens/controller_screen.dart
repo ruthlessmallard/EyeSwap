@@ -73,7 +73,8 @@ class _ControllerScreenState extends State<ControllerScreen> {
       colorHex: colorHex,
       accentHex: accentHex,
     );
-    await _bleHandler.sendMode(animation);
+    // resync: stored settings, not a pick -- must not kill Random Cycle.
+    await _bleHandler.sendMode(animation, resync: true);
   }
 
   Future<bool> _refreshPermissionState() async {
