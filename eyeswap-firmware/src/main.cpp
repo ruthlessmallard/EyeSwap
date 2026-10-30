@@ -6,8 +6,6 @@
 
 #include "dbonsai.h"
 #include "shooter.h"
-#include "dig.h"
-#include "slab.h"
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -65,15 +63,39 @@ unsigned long lastMarqueeUpdate = 0;
 #define TICKER_COLOR 0xFDE0
 
 // ==== Display mode + config (set over BLE) ====
-enum DisplayMode { MODE_SALVO, MODE_STATIC, MODE_NOW_PLAYING, MODE_BOIDS, MODE_BONSAI, MODE_FIRE, MODE_KNIGHT, MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY, MODE_EQ, MODE_INDICATOR, MODE_SLAB, MODE_DBONSAI, MODE_DIG };
+enum DisplayMode {
+  // Values are pinned: the saved mode lives in NVS as this byte, so removing
+  // animations must never renumber the ones that survive.
+  MODE_STATIC    = 1,
+  MODE_NOW_PLAYING = 2,
+  MODE_BOIDS     = 3,
+  MODE_BONSAI    = 4,
+  MODE_FIRE      = 5,
+  MODE_KNIGHT    = 6,
+  MODE_RADAR     = 7,
+  MODE_STARFIELD = 8,
+  MODE_EQ        = 11,
+  MODE_INDICATOR = 12,
+  MODE_DBONSAI   = 14
+};
+static bool modeValid(uint8_t v) {
+  switch (v) {
+    case MODE_STATIC: case MODE_NOW_PLAYING: case MODE_BOIDS:
+    case MODE_BONSAI: case MODE_FIRE: case MODE_KNIGHT: case MODE_RADAR:
+    case MODE_STARFIELD: case MODE_EQ: case MODE_DBONSAI:
+      return true;
+    default:
+      return false;
+  }
+}
 
 // Random Cycle: rotate the pod through the visual roster on a timer.
 #define CYCLE_MS 600000UL   // 10 minutes per animation
 // Random Cycle is background ambience, so it skips the things you pick on
 // purpose: quickdraw, slabbed, deep dig, and both bonsai builds.
 static const DisplayMode CYCLE_MODES[] = {
-  MODE_SALVO, MODE_STATIC, MODE_BOIDS, MODE_FIRE, MODE_KNIGHT,
-  MODE_RADAR, MODE_STARFIELD, MODE_OSC, MODE_RALLY
+  MODE_STATIC, MODE_BOIDS, MODE_FIRE, MODE_KNIGHT,
+  MODE_RADAR, MODE_STARFIELD
 };
 #define CYCLE_N ((int)(sizeof(CYCLE_MODES) / sizeof(CYCLE_MODES[0])))
 DisplayMode displayMode = MODE_STATIC;   // the user's chosen animation (persisted)
@@ -601,7 +623,6 @@ void updateBonsai() {
 // The module in dbonsai.cpp grows a 60x60 tree: parametric trunk/branches, then
 // foliage clumps accreted one cell at a time. Time is compressed for the bench:
 // 24 simulated hours run in ~1.5 minutes, then the tree holds and replants.
-#define SH_FORCE_BOOT 0       // normal boot: show startup marquee, then honor saved mode/cycle
 #define DNB_W        60
 #define DNB_H        60
 #define DNB_PX       4
@@ -701,19 +722,6 @@ static unsigned long lastFireUpdate = 0;
 static void ffBuildPalette();             // fire palette follows the user colours
 static void ffRepaint();
 static uint32_t ffFlicker = 0;            // per-tick seed for flame flicker
-
-// ==== Pipes (MODE_PIPES): phosphor 3D tube maze on a lattice ====
-#define PIPE_COUNT 5
-#define PIPE_N 7                     // lattice nodes per axis
-#define PIPE_STEP_MS 240             // one segment per tick, round-robin (Win98 pace)
-struct Pipe { int x, y, z, dx, dy, dz, steps, maxSteps; bool alive; };
-static Pipe pipes[PIPE_COUNT];
-static int pipesAlive = 0;
-static uint8_t pipeTurn = 0;
-static unsigned long lastPipeUpdate = 0;
-static unsigned long pipesRespawnAt = 0;
-static float pipeCosY, pipeSinY, pipeCosP, pipeSinP;
-#define PIPE_SCALE 19.0f
 
 // ==== Pet (MODE_RADAR slot): a small persistent goo creature ====
 // Two meters, one button. Food falls on one side of the face; the goo walks
@@ -1135,51 +1143,6 @@ static const uint8_t BAYER4[4][4] = {
   {15,  7, 13,  5}
 };
 
-// ==== Snake (MODE_OSC): autonomous snake, the pod tries to survive ====
-// 40x40 cells at 4px = a 160px board centred on the round face (half-diagonal
-// 113px, inside the ~118px visible radius). Torus wrap at the edges so the
-// snake never dies against a bezel it cannot see.
-#define SNK_W 40
-#define SNK_H 40
-#define SNK_CELL 4
-#define SNK_X0 40                       // board origin in px
-#define SNK_Y0 40
-#define SNK_STEP_MS 110                 // ~9 cells/sec
-#define SNK_MAX (SNK_W * SNK_H)
-#define SNK_DEAD_HOLD 1400              // ms to sit on a dead snake
-
-static uint8_t snkOcc[SNK_W * SNK_H];        // 1 = body
-static uint8_t snkSegX[SNK_W * SNK_H], snkSegY[SNK_W * SNK_H];  // [0] = head
-static int16_t snkLen = 0;
-static int8_t snkDX = 1, snkDY = 0;
-static uint8_t snkFX = 20, snkFY = 20;
-static uint16_t snkBest = 0;
-static unsigned long snkLast = 0, snkDeadAt = 0;
-
-// ==== Rally (MODE_RALLY): autonomous rally, blocky digits ====
-#define RALLY_TOP 54
-#define RALLY_BOT 186
-#define RALLY_PAD_H 30
-#define RALLY_PAD_X_L 25
-#define RALLY_PAD_X_R 215
-struct RallyPaddle { float y, err; };
-static RallyPaddle rallyL, rallyR;
-static float rallyBallX, rallyBallY, rallyBallVX, rallyBallVY;
-static int rallyScoreL = 0, rallyScoreR = 0, rallyServeDelay = 0, rallyFrame = 0;
-static unsigned long lastRallyUpdate = 0;
-
-// ==== Eye (MODE_EQ): pixel-art eyeball — parked, quickdraw shooter took the slot ====
-#if 0
-static uint8_t eyeSpecies = 0;              // 0 human, 1 cat, 2 goat, 3 robot
-static float eyeGX = 0, eyeGY = 0;          // current gaze offset, px
-static float eyeTargetX = 0, eyeTargetY = 0;
-static float eyeLid = 1.0f;                 // 1 = open, 0 = shut
-static bool eyeSnap = false;
-static unsigned long lastEyeUpdate = 0;
-static unsigned long eyeNextDriftAt = 0, eyeNextSnapAt = 0, eyeSnapEnd = 0;
-static unsigned long eyeNextBlinkAt = 0, eyeBlinkEnd = 0, eyeNextSpeciesAt = 0;
-#endif
-
 // ==== Forward Declarations ====
 void setupTFT();
 void setupButtons();
@@ -1201,25 +1164,12 @@ void fireInit();
 void updateFire();
 void knightInit();
 void updateKnight();
-void salvoInit();
-void updateSalvo();
-void pipesInit();
-void updatePipes();
 void radarInit();
 void updateTama();
 void dlaInit();
 void updateDla();
-void snkInit();
-void updateSnake();
-void rallyInit();
-void updateRally();
 static void shStart();
 static void shUpdate();
-static void dgStart();
-static void dgUpdate();
-static void slStart();
-static void slUpdate();
-static void slInteract();
 void renderDisplay();
 void setDisplayMode(DisplayMode mode, bool remember = false);
 void applyDisplayColor();
@@ -1254,8 +1204,6 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       if (cycleEnabled && (strcmp(anim, "cycle") == 0 || strcmp(anim, "random") == 0)) return;
       // No TFT work here -- just record it; the loop task applies it.
       if (strcmp(anim, "marquee") == 0)          { mpTestOnePass = true; }   // indicator test, not a mode
-      else if (strcmp(anim, "pipes") == 0 || strcmp(anim, "slab") == 0 || strcmp(anim, "slabbed") == 0 || strcmp(anim, "slab1") == 0) { pendingMode = MODE_SLAB; modeDirty = true; }
-      else if (strcmp(anim, "salvo") == 0 || strcmp(anim, "artillery") == 0 || strcmp(anim, "cannon") == 0) { pendingMode = MODE_SALVO; modeDirty = true; }
       else if (strcmp(anim, "static") == 0)      { pendingMode = MODE_STATIC;      modeDirty = true; }
       else if (strcmp(anim, "now_playing") == 0) { pendingMode = MODE_NOW_PLAYING; modeDirty = true; }
       else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
@@ -1265,10 +1213,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "knight") == 0 || strcmp(anim, "run") == 0 || strcmp(anim, "jump") == 0) { pendingMode = MODE_KNIGHT; modeDirty = true; }
       else if (strcmp(anim, "radar") == 0 || strcmp(anim, "pet") == 0) { pendingMode = MODE_RADAR; modeDirty = true; }
       else if (strcmp(anim, "starfield") == 0 || strcmp(anim, "dla") == 0 || strcmp(anim, "crystal") == 0) { pendingMode = MODE_STARFIELD; modeDirty = true; }
-      else if (strcmp(anim, "oscilloscope") == 0 || strcmp(anim, "osc") == 0 || strcmp(anim, "snake") == 0) { pendingMode = MODE_OSC; modeDirty = true; }
-      else if ((strcmp(anim, "rally") == 0 || strcmp(anim, "pong") == 0))        { pendingMode = MODE_RALLY;        modeDirty = true; }
       else if (strcmp(anim, "eq") == 0 || strcmp(anim, "eye") == 0 || strcmp(anim, "eyeball") == 0) { pendingMode = MODE_EQ; modeDirty = true; }
-      else if (strcmp(anim, "dig") == 0 || strcmp(anim, "deepdig") == 0 || strcmp(anim, "mine") == 0 || strcmp(anim, "gold") == 0) { pendingMode = MODE_DIG; modeDirty = true; }
       else if (strcmp(anim, "cycle") == 0 || strcmp(anim, "random") == 0) { cycleStart = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
@@ -1343,12 +1288,8 @@ void setup() {
   {
     DisplayMode savedMode =
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_STATIC);
-    if (savedMode == MODE_INDICATOR || (uint8_t)savedMode > (uint8_t)MODE_DIG)
-      savedMode = MODE_STATIC;
+    if (!modeValid((uint8_t)savedMode)) savedMode = MODE_STATIC;
     displayMode = savedMode;
-#if SH_FORCE_BOOT
-    displayMode = MODE_SLAB;         // bench: always come up on slabbed
-#endif
     if (prefs.getBool("cycle", false)) {      // restore Random Cycle across reboots
       cycleEnabled = true;
       cycleIndex = 0;
@@ -1358,9 +1299,6 @@ void setup() {
       cycleLastHop = millis();
       Serial.println("[NVS] restored Random Cycle");
     }
-#if SH_FORCE_BOOT
-    cycleEnabled = false;            // bench: no shuffle, stay on the dig build
-#endif
     brightnessOffset = prefs.getInt("bright", 0);
     baseR = prefs.getUChar("cr", 0xFF);
     baseG = prefs.getUChar("cg", 0xBF);
@@ -1383,18 +1321,6 @@ void setup() {
 // ==========================================
 void loop() {
   bnTick();                                  // the tree grows whether or not it is shown
-#if SH_FORCE_BOOT
-  {
-    static bool shBootDone = false;
-    if (!shBootDone) {                       // bench: come up on the shooter, skip marquee
-      shBootDone = true;
-      mpPhase = MP_ANIM;
-      mpSince = millis();
-      cycleEnabled = false;                  // bench: kill shuffle for the test build
-      setDisplayMode(MODE_SLAB);
-    }
-  }
-#endif
   handleButtons();
   if (cycleStart) {                          // Random Cycle: start now
     cycleStart = false;
@@ -1640,7 +1566,7 @@ void saveDisplaySettings() {
 
 void setDisplayMode(DisplayMode mode, bool remember) {
   activeMode = mode;
-  if (lifeSpriteReady && mode != MODE_EQ && mode != MODE_DIG) setStandardPalette(); // shooter and dig own their palettes while active
+  if (lifeSpriteReady && mode != MODE_EQ) setStandardPalette(); // shooter and dig own their palettes while active
   if (remember) {
     displayMode = mode;
     saveDisplaySettings();
@@ -1655,12 +1581,7 @@ void setDisplayMode(DisplayMode mode, bool remember) {
     tft.setTextFont(1);
     tft.setTextSize(4);
     tft.setTextDatum(TL_DATUM);
-    tft.setTextColor(drawColor);
-  } else if (mode == MODE_SLAB) {
-    slStart();
-  } else if (mode == MODE_SALVO) {
-    salvoInit();
-  } else if (mode == MODE_STATIC) {
+    tft.setTextColor(drawColor);  } else if (mode == MODE_STATIC) {
     lifeSeed();
   } else if (mode == MODE_BOIDS) {
     boidInit();
@@ -1675,16 +1596,8 @@ void setDisplayMode(DisplayMode mode, bool remember) {
   } else if (mode == MODE_RADAR) {
     radarInit();
   } else if (mode == MODE_STARFIELD) {
-    dlaInit();
-  } else if (mode == MODE_OSC) {
-    snkInit();
-  } else if (mode == MODE_RALLY) {
-    rallyInit();
-  } else if (mode == MODE_EQ) {
-    shStart();
-  } else if (mode == MODE_DIG) {
-    dgStart();
-  }
+    dlaInit();  } else if (mode == MODE_EQ) {
+    shStart();  }
   Serial.printf("[TFT] Display mode -> %d\n", (int)mode);
 }
 
@@ -2455,136 +2368,6 @@ void updateFire() {
   lifeSpr.pushSprite(0, 0);
 }
 
-// ==== Pipes (MODE_PIPES) ====
-static const int PIPE_DIRS[6][3] = {
-  { 1, 0, 0}, {-1, 0, 0}, { 0, 1, 0}, { 0,-1, 0}, { 0, 0, 1}, { 0, 0,-1}
-};
-
-// Fixed 3/4 view: yaw -30 deg, pitch ~25 deg, orthographic.
-static void pipeProject(float xi, float yi, float zi, int* sx, int* sy, float* depth) {
-  const float c = (PIPE_N - 1) * 0.5f;
-  float x = xi - c, y = yi - c, z = c - zi;          // z up
-  float xr = x * pipeCosY - y * pipeSinY;
-  float yr = x * pipeSinY + y * pipeCosY;
-  float yy = yr * pipeCosP - z * pipeSinP;           // screen up
-  float dd = yr * pipeSinP + z * pipeCosP;           // toward viewer
-  *sx = 120 + (int)lroundf(xr * PIPE_SCALE);
-  *sy = 120 - (int)lroundf(yy * PIPE_SCALE);
-  *depth = dd;
-}
-
-static int pipeRadius(float d) {
-  if (d > 1.2f) return 3;           // near: fat
-  if (d < -1.2f) return 1;          // far: thin
-  return 2;
-}
-
-// mode 0: any valid direction; mode 1: elbow turn (no straight/reverse).
-static void pipePickDir(Pipe* p, bool turn) {
-  for (int tries = 0; tries < 12; tries++) {
-    int k = random(6);
-    const int* d = PIPE_DIRS[k];
-    bool straight = (d[0] == p->dx && d[1] == p->dy && d[2] == p->dz);
-    bool reverse  = (d[0] == -p->dx && d[1] == -p->dy && d[2] == -p->dz);
-    if (turn && (straight || reverse)) continue;
-    if (!turn && reverse) continue;
-    int nx = p->x + d[0], ny = p->y + d[1], nz = p->z + d[2];
-    if (nx < 0 || nx >= PIPE_N || ny < 0 || ny >= PIPE_N || nz < 0 || nz >= PIPE_N) continue;
-    p->dx = d[0]; p->dy = d[1]; p->dz = d[2];
-    return;
-  }
-  p->alive = false;   // boxed in
-}
-
-void pipesInit() {
-  randomSeed(esp_random());
-  pipeCosY = cosf(-0.52f); pipeSinY = sinf(-0.52f);
-  pipeCosP = cosf(0.44f);  pipeSinP = sinf(0.44f);
-  lifeSpr.fillSprite(0);
-  pipesAlive = 0;
-  pipeTurn = 0;
-  for (int i = 0; i < PIPE_COUNT; i++) {
-    Pipe* p = &pipes[i];
-    // Enter from a random face of the cube, heading inward: the Win98 pipes
-    // grow into the volume instead of materialising inside it.
-    p->x = random(PIPE_N); p->y = random(PIPE_N); p->z = random(PIPE_N);
-    switch (random(3)) {
-      case 0: p->x = random(2) ? PIPE_N - 1 : 0; break;
-      case 1: p->y = random(2) ? PIPE_N - 1 : 0; break;
-      default: p->z = random(2) ? PIPE_N - 1 : 0; break;
-    }
-    p->steps = 0; p->maxSteps = 28 + random(36);
-    p->dx = p->dy = p->dz = 0;
-    p->alive = true;
-    pipePickDir(p, false);
-    if (!p->alive) continue;
-    pipesAlive++;
-    int sx, sy; float d;
-    pipeProject(p->x, p->y, p->z, &sx, &sy, &d);
-    lifeSpr.fillCircle(sx, sy, pipeRadius(d), 1);
-  }
-  lifeSpr.pushSprite(0, 0);
-}
-
-void updatePipes() {
-  unsigned long now = millis();
-  if (pipesAlive == 0) {
-    if (pipesRespawnAt == 0 || now >= pipesRespawnAt) pipesInit();
-    return;
-  }
-  if (now - lastPipeUpdate < PIPE_STEP_MS) return;
-  lastPipeUpdate = now;
-
-  // Advance exactly one pipe per tick, round-robin. At 240 ms that is about
-  // four segments a second across five tubes -- slow enough to watch a single
-  // pipe build, which is the Win98 feel.
-  int idx = -1;
-  for (int t = 0; t < PIPE_COUNT; t++) {
-    const int c = (pipeTurn + t) % PIPE_COUNT;
-    if (pipes[c].alive) { idx = c; break; }
-  }
-  if (idx < 0) return;
-  pipeTurn = (idx + 1) % PIPE_COUNT;
-
-  Pipe* p = &pipes[idx];
-  bool turned = false;
-  if (random(100) < 26) {
-    pipePickDir(p, true);              // elbow
-    turned = true;
-  } else {
-    int nx = p->x + p->dx, ny = p->y + p->dy, nz = p->z + p->dz;
-    if (nx < 0 || nx >= PIPE_N || ny < 0 || ny >= PIPE_N || nz < 0 || nz >= PIPE_N)
-      pipePickDir(p, false);           // wall ahead: try any way out
-  }
-  if (!p->alive) { pipesAlive--; lifeSpr.pushSprite(0, 0); return; }
-
-  int nx = p->x + p->dx, ny = p->y + p->dy, nz = p->z + p->dz;
-  int x0, y0, x1, y1; float d0, d1;
-  pipeProject(p->x, p->y, p->z, &x0, &y0, &d0);
-  pipeProject(nx, ny, nz, &x1, &y1, &d1);
-
-  // Depth shading: near runs fat, far runs thin (1bpp phosphor look).
-  float dmid = d0 + d1;
-  int thick = (dmid > 1.0f) ? 3 : ((dmid < -1.0f) ? 1 : 2);
-  float dx = x1 - x0, dy = y1 - y0;
-  float len = sqrtf(dx * dx + dy * dy) + 0.001f;
-  float px = -dy / len, py = dx / len;
-  for (int k = -(thick / 2); k <= thick / 2; k++)
-    lifeSpr.drawLine(x0 + (int)lroundf(px * k), y0 + (int)lroundf(py * k),
-                     x1 + (int)lroundf(px * k), y1 + (int)lroundf(py * k), 1);
-  if (turned) lifeSpr.fillCircle(x0, y0, thick + 1, 2);   // joint sphere (accent)
-
-  p->x = nx; p->y = ny; p->z = nz; p->steps++;
-  if (p->steps >= p->maxSteps) {
-    lifeSpr.fillCircle(x1, y1, thick, 2);                  // end cap (accent)
-    p->alive = false;
-    pipesAlive--;
-  }
-
-  lifeSpr.pushSprite(0, 0);
-  if (pipesAlive == 0) pipesRespawnAt = millis() + 2400;
-}
-
 // ==== Knight Run (MODE_KNIGHT): endless runner, hops bales + walls, ducks arrows ====
 // Pipes lives in its own slot again (MODE_PIPES); this mode never shares it.
 #define KR_KX        46                  // knight's fixed x
@@ -2839,7 +2622,7 @@ void updateKnight() {
 // ==== Coin Dozer: PARKED 2026-10-24 (Salvo took slot 0). Nothing deleted.
 // Flip #if 0 to #if 1 to bring it back; it needs its own enum value to run.
 #if 0
-// ==== Coin Dozer (MODE_SALVO): plate shoves a pile of blocky coins off the edge ====
+// ==== Coin Dozer (parked): plate shoves a pile of blocky coins off the edge ====
 // Stacking is a 1D sandpile per column, not rigid-body collisions: a coin can
 // never sink into another, which is the failure the circle solver showed.
 #define CD_COLS      10
@@ -3032,249 +2815,6 @@ void updateCoin() {
 
 #endif  // Coin Dozer
 
-// ==== Salvo (MODE_SALVO): WW1 artillery, player-timed elevation ====
-// Camera stays at the receiving end. Elevation sweeps up and down, so the aim
-// point rides a drawn arc and the landing point slides with it. Three presses
-// store three rounds; then all three fly and land -- around the gun, or on it.
-// No hidden bracketing and no AI gunner: a miss is your thumb, not a dice roll.
-#define SV_TICK_MS     20
-#define SV_RISE_MS     620UL                       // one traverse of the sweep
-#define SV_PAUSE_MS    220UL                       // dwell at each end
-#define SV_CYCLE_MS    (2UL * (SV_RISE_MS + SV_PAUSE_MS))
-#define SV_LAND_MIN    92
-#define SV_LAND_MAX    148
-#define SV_HIT_R       6
-#define SV_SHOTS       3
-#define SV_FLIGHT_MS   480UL
-#define SV_BURST_MS    240UL
-#define SV_GAP_MS      120UL
-#define SV_READ_MS     900UL
-#define SV_GUN_X       96
-#define SV_GROUND      178
-#define SV_TARGET_X    (240 - SV_GUN_X)            // 144
-#define SV_MUZZLE_X    20
-#define SV_WIND        4                           // px of drift, each side
-
-enum SvPhase : uint8_t { SV_AIM, SV_SALVO, SV_READ };
-
-static SvPhase svPhase = SV_AIM;
-static unsigned long svPhaseAt = 0, svLastTick = 0, svSweepAt = 0, svRoundAt = 0;
-static uint8_t svAimN = 0;                         // rounds stored this volley
-static uint8_t svRound = 0;                        // round in the air
-static uint8_t svHits = 0;                         // session score
-static int16_t svLandX[SV_SHOTS];
-static float   svElev[SV_SHOTS];
-static bool    svTap = false;
-static bool    svWrecked = false;
-
-static void svSetPhase(SvPhase ph) { svPhase = ph; svPhaseAt = millis(); }
-
-// 0..1 with a dwell at the ends: the reticle slows where it matters instead of
-// whipping past the target at full speed.
-static float svAimV() {
-  const uint32_t p0 = (uint32_t)(millis() - svSweepAt) % SV_CYCLE_MS;
-  if (p0 < SV_RISE_MS) return (float)p0 / (float)SV_RISE_MS;
-  uint32_t p = p0 - SV_RISE_MS;
-  if (p < SV_PAUSE_MS) return 1.0f;
-  p -= SV_PAUSE_MS;
-  if (p < SV_RISE_MS) return 1.0f - (float)p / (float)SV_RISE_MS;
-  return 0.0f;
-}
-
-static int svLandFor(float v) {
-  return SV_LAND_MIN + (int)lroundf(v * (float)(SV_LAND_MAX - SV_LAND_MIN));
-}
-
-static float svArcH(float v) { return 28.0f + 42.0f * v; }
-
-static int svArcY(float v, float u) {
-  const float h = svArcH(v);
-  int y = SV_GROUND - (int)(4.0f * h * u * (1.0f - u));
-  return (y < 3) ? 3 : y;
-}
-
-static void svArc(int landX, float v, uint8_t ink) {
-  const int dx = landX - SV_MUZZLE_X;
-  if (dx < 8) return;
-  for (int i = 0; i <= dx; i += 4) {
-    const float u = (float)i / (float)dx;
-    lifeSpr.fillRect(SV_MUZZLE_X + i, svArcY(v, u), 2, 1, ink);
-  }
-}
-
-static void svCross(int landX, uint8_t ink, uint8_t rim) {
-  const int y = SV_GROUND - 8;
-  lifeSpr.fillRect(landX - 5, y, 4, 2, ink);
-  lifeSpr.fillRect(landX + 2, y, 4, 2, ink);
-  lifeSpr.fillRect(landX - 1, y - 5, 2, 4, ink);
-  lifeSpr.fillRect(landX - 1, y + 2, 2, 4, ink);
-  lifeSpr.fillRect(landX - 1, y - 1, 2, 2, rim);
-  lifeSpr.fillRect(landX - 7, SV_GROUND - 4, 3, 2, ink);
-  lifeSpr.fillRect(landX + 5, SV_GROUND - 4, 3, 2, ink);
-}
-
-static void svCannon(int x, uint8_t ink, uint8_t rim, bool faceRight, bool wreck) {
-  const int g = SV_GROUND;
-  if (wreck) {
-    lifeSpr.fillRect(x - 28, g - 9, 54, 9, ink);
-    lifeSpr.fillRect(x - 12, g - 22, 20, 13, ink);
-    lifeSpr.fillRect(x + 6, g - 30, 9, 9, rim);
-    lifeSpr.fillRect(x - 22, g - 26, 7, 6, rim);
-    return;
-  }
-  lifeSpr.fillRect(x - 30, g - 18, 18, 18, ink);
-  lifeSpr.fillRect(x - 27, g - 15, 12, 12, 0);
-  lifeSpr.fillRect(x + 12, g - 18, 18, 18, ink);
-  lifeSpr.fillRect(x + 15, g - 15, 12, 12, 0);
-  lifeSpr.fillRect(x - 34, g - 10, 68, 6, ink);
-  lifeSpr.fillRect(x - 18, g - 46, 36, 30, ink);
-  lifeSpr.fillRect(x - 13, g - 41, 26, 5, rim);
-  lifeSpr.fillRect(x - 13, g - 32, 26, 3, rim);
-  for (int i = 0; i < 5; i++) {
-    const int bx = faceRight ? (x + 6 + i * 9) : (x - 15 - i * 9);
-    lifeSpr.fillRect(bx, g - 45 - i * 6, 8, 6, ink);
-  }
-}
-
-static void svMark(int x) {
-  lifeSpr.fillRect(x - 4, SV_GROUND - 2, 9, 2, 2);
-  lifeSpr.fillRect(x - 2, SV_GROUND - 4, 5, 2, 2);
-  lifeSpr.fillRect(x, SV_GROUND - 6, 2, 2, 2);
-}
-
-static void svShell(int landX, float v, float u) {
-  const int dx = landX - SV_MUZZLE_X;
-  const int x = SV_MUZZLE_X + (int)(u * (float)dx);
-  const int y = svArcY(v, u) - 2;
-  lifeSpr.fillRect(x, y, 5, 4, 1);
-  lifeSpr.fillRect(x + 1, y + 1, 3, 2, 2);
-}
-
-static void svBurst(int x) {
-  const int y = SV_GROUND - 8;
-  lifeSpr.fillRect(x - 7, y - 2, 5, 4, 2);
-  lifeSpr.fillRect(x + 3, y - 4, 5, 4, 2);
-  lifeSpr.fillRect(x - 2, y - 10, 4, 5, 2);
-  lifeSpr.fillRect(x - 1, y - 1, 5, 5, 1);
-}
-
-static void svHud() {
-  blockNumber((int)svHits, 62, 26, 2, 1);
-  for (int i = 0; i < SV_SHOTS; i++) {
-    const bool got = (i < (int)svAimN);
-    lifeSpr.fillRect(150 + i * 12, 27, 9, 9, 2);
-    if (got) lifeSpr.fillRect(152 + i * 12, 29, 5, 5, 1);
-  }
-}
-
-static void svRender() {
-  lifeSpr.fillSprite(0);
-  const int g = SV_GROUND;
-
-  lifeSpr.fillRect(10, g, 220, 2, 1);
-  for (int x = 16; x < 226; x += 14) lifeSpr.fillRect(x, g + 4, 5, 1, 1);
-  svCannon(SV_TARGET_X, 2, 1, false, svWrecked);
-
-  if (svPhase == SV_AIM) {
-    const float v = svAimV();
-    const int landX = svLandFor(v);
-    svArc(landX, v, 1);
-    svCross(landX, 1, 2);
-  } else {
-    for (int i = 0; i < SV_SHOTS; i++) {
-      if (svPhase == SV_READ || i < (int)svRound) { svMark(svLandX[i]); continue; }
-      if (i > (int)svRound) continue;
-      const unsigned long el = millis() - svRoundAt;
-      if (el < SV_FLIGHT_MS) {
-        svArc(svLandX[i], svElev[i], 2);
-        svShell(svLandX[i], svElev[i], (float)el / (float)SV_FLIGHT_MS);
-      } else if (el < SV_FLIGHT_MS + SV_BURST_MS) {
-        svBurst(svLandX[i]);
-      } else {
-        svMark(svLandX[i]);
-      }
-    }
-  }
-
-  svHud();
-  lifeSpr.pushSprite(0, 0);
-}
-
-void salvoInit() {
-  randomSeed(esp_random());
-  svHits = 0;
-  svAimN = 0;
-  svRound = 0;
-  svWrecked = false;
-  svTap = false;
-  for (int i = 0; i < SV_SHOTS; i++) { svLandX[i] = SV_TARGET_X; svElev[i] = 0.5f; }
-  svLastTick = millis();
-  svSweepAt = millis();
-  svSetPhase(SV_AIM);
-  svRender();
-}
-
-// button 3: store the aim point as it sweeps past
-static void svInteract() { if (svPhase == SV_AIM) svTap = true; }
-
-void updateSalvo() {
-  const unsigned long now = millis();
-  if (now - svLastTick < SV_TICK_MS) return;
-  svLastTick = now;
-
-  switch (svPhase) {
-    case SV_AIM:
-      if (svTap) {
-        svTap = false;
-        const float v = svAimV();
-        svElev[svAimN] = v;
-        svLandX[svAimN] = (int16_t)svLandFor(v);
-        svAimN++;
-        if (svAimN >= SV_SHOTS) {
-          for (int i = 0; i < SV_SHOTS; i++) {          // a little drift each
-            int x = svLandX[i] + (int)random(-SV_WIND, SV_WIND + 1);
-            if (x < SV_MUZZLE_X + 14) x = SV_MUZZLE_X + 14;
-            if (x > 232) x = 232;
-            svLandX[i] = (int16_t)x;
-          }
-          svRound = 0;
-          svRoundAt = now;
-          svSetPhase(SV_SALVO);
-        }
-      }
-      break;
-
-    case SV_SALVO: {
-      const unsigned long per = SV_FLIGHT_MS + SV_BURST_MS + SV_GAP_MS;
-      if (now - svRoundAt >= per) {
-        svRoundAt = now;
-        svRound++;
-        if (svRound >= SV_SHOTS) {
-          uint8_t h = 0;
-          for (int i = 0; i < SV_SHOTS; i++)
-            if (abs((int)svLandX[i] - SV_TARGET_X) <= SV_HIT_R) h++;
-          svHits = (uint8_t)(svHits + h);
-          svWrecked = (h > 0);
-          svSetPhase(SV_READ);
-        }
-      }
-      break;
-    }
-
-    case SV_READ:
-      if (now - svPhaseAt >= SV_READ_MS) {
-        svAimN = 0;
-        svRound = 0;
-        svWrecked = false;
-        svSweepAt = now;
-        svSetPhase(SV_AIM);
-      }
-      break;
-  }
-
-  svRender();
-}
-
 // ==== Crystal (MODE_STARFIELD): diffusion-limited aggregation ====
 // One random walker at a time diffuses around the deposit and sticks where it
 // touches. Walkers launch just outside the current surface instead of from a
@@ -3383,290 +2923,6 @@ void updateDla() {
   }
 
   if (dirty) lifeSpr.pushSprite(0, 0);
-}
-
-// ==== Snake (MODE_OSC): the pod plays itself, trying not to die ====
-static inline int snkIdx(int x, int y) { return y * SNK_W + x; }
-
-static inline void snkPlot(int x, int y, int slot) {
-  lifeSpr.fillRect(SNK_X0 + x * SNK_CELL, SNK_Y0 + y * SNK_CELL,
-                   SNK_CELL, SNK_CELL, (uint8_t)slot);
-}
-
-static void snkDrawFood() {
-  // a pellet inside the cell, not a full block
-  const int px = SNK_X0 + snkFX * SNK_CELL, py = SNK_Y0 + snkFY * SNK_CELL;
-  lifeSpr.fillRect(px, py, SNK_CELL, SNK_CELL, 0);
-  lifeSpr.fillRect(px + 1, py + 1, 2, 2, 2);
-}
-
-static void snkSpawnFood() {
-  for (int t = 0; t < 400; t++) {
-    const int x = random(SNK_W), y = random(SNK_H);
-    if (!snkOcc[snkIdx(x, y)]) { snkFX = (uint8_t)x; snkFY = (uint8_t)y; snkDrawFood(); return; }
-  }
-  snkFX = 0; snkFY = 0;                 // board full: nowhere to put it
-}
-
-static void snkReset() {
-  memset(snkOcc, 0, sizeof(snkOcc));
-  lifeSpr.fillSprite(0);
-  const int cx = SNK_W / 2, cy = SNK_H / 2;
-  snkLen = 4;
-  for (int i = 0; i < snkLen; i++) {
-    snkSegX[i] = (uint8_t)(cx - i);
-    snkSegY[i] = (uint8_t)cy;
-    snkOcc[snkIdx(cx - i, cy)] = 1;
-    snkPlot(cx - i, cy, i ? 1 : 2);
-  }
-  snkDX = 1; snkDY = 0;
-  snkDeadAt = 0;
-  snkSpawnFood();
-  lifeSpr.pushSprite(0, 0);
-}
-
-// Free cells reachable from (sx,sy) with the body as it will be after the move
-// (the tail cell is freed first). This is what keeps the AI from sealing itself
-// into a pocket: a move that can still reach fewer cells than it has body is
-// suicide, however close it puts the head to the pellet.
-static int snkFlood(int sx, int sy, int tx, int ty) {
-  static uint8_t seen[SNK_MAX];
-  static uint16_t q[SNK_MAX];
-  memset(seen, 0, sizeof(seen));
-  int qh = 0, qt = 0, count = 0;
-  const int start = snkIdx(sx, sy);
-  q[qt++] = (uint16_t)start;
-  seen[start] = 1;
-  while (qh < qt) {
-    const uint16_t c = q[qh++];
-    const int cx = c % SNK_W, cy = c / SNK_W;
-    count++;
-    for (int k = 0; k < 4; k++) {
-      static const int8_t NX[4] = {1, -1, 0, 0};
-      static const int8_t NY[4] = {0, 0, 1, -1};
-      const int nx = (cx + NX[k] + SNK_W) % SNK_W;
-      const int ny = (cy + NY[k] + SNK_H) % SNK_H;
-      const int ni = snkIdx(nx, ny);
-      if (seen[ni]) continue;
-      bool blocked = snkOcc[ni] != 0;
-      if (blocked && nx == tx && ny == ty) blocked = false;   // tail moves away
-      if (blocked) continue;
-      seen[ni] = 1;
-      if (qt < SNK_MAX) q[qt++] = (uint16_t)ni;
-    }
-  }
-  return count;
-}
-
-static void snkDie() {
-  snkDeadAt = millis() + SNK_DEAD_HOLD;
-  if (snkLen > snkBest) { snkBest = snkLen; Serial.printf("[SNAKE] best %d\n", (int)snkBest); }
-  // blink the corpse so the death is legible, then it starts over
-  for (int i = 0; i < snkLen; i++)
-    snkPlot(snkSegX[i], snkSegY[i], 2);
-  lifeSpr.pushSprite(0, 0);
-}
-
-static void snkMove() {
-  const int hx = snkSegX[0], hy = snkSegY[0];
-  const int tx = snkSegX[snkLen - 1], ty = snkSegY[snkLen - 1];
-  static const int8_t D[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-
-  int safeDir = -1, safeDist = 1 << 20;
-  int anyDir = -1, anyReach = -1;
-
-  for (int k = 0; k < 4; k++) {
-    if (D[k][0] == -snkDX && D[k][1] == -snkDY) continue;      // no reversing
-    const int nx = (hx + D[k][0] + SNK_W) % SNK_W;
-    const int ny = (hy + D[k][1] + SNK_H) % SNK_H;
-    if (snkOcc[snkIdx(nx, ny)] && !(nx == tx && ny == ty)) continue;
-    const bool eats = (nx == snkFX && ny == snkFY);
-    const int reach = snkFlood(nx, ny, tx, ty);
-    if (reach > anyReach) { anyReach = reach; anyDir = k; }
-    const int need = snkLen + (eats ? 1 : 0) - 1;              // room left to coil
-    if (reach >= need) {
-      const int dist = abs(nx - snkFX) + abs(ny - snkFY);
-      if (safeDir < 0 || dist < safeDist) { safeDir = k; safeDist = dist; }
-    }
-  }
-
-  const int dir = (safeDir >= 0) ? safeDir : anyDir;
-  if (dir < 0) { snkDie(); return; }
-  snkDX = D[dir][0];
-  snkDY = D[dir][1];
-
-  const int nx = (hx + snkDX + SNK_W) % SNK_W;
-  const int ny = (hy + snkDY + SNK_H) % SNK_H;
-  const bool eats = (nx == snkFX && ny == snkFY);
-
-  if (eats) {
-    if (snkLen < SNK_MAX) {
-      memmove(&snkSegX[1], &snkSegX[0], snkLen * sizeof(uint8_t));
-      memmove(&snkSegY[1], &snkSegY[0], snkLen * sizeof(uint8_t));
-      snkLen++;
-    } else {
-      memmove(&snkSegX[1], &snkSegX[0], (snkLen - 1) * sizeof(uint8_t));
-      memmove(&snkSegY[1], &snkSegY[0], (snkLen - 1) * sizeof(uint8_t));
-    }
-  } else {
-    memmove(&snkSegX[1], &snkSegX[0], (snkLen - 1) * sizeof(uint8_t));
-    memmove(&snkSegY[1], &snkSegY[0], (snkLen - 1) * sizeof(uint8_t));
-    snkOcc[snkIdx(tx, ty)] = 0;
-    snkPlot(tx, ty, 0);                       // tail vacates
-  }
-  snkSegX[0] = (uint8_t)nx;
-  snkSegY[0] = (uint8_t)ny;
-  snkOcc[snkIdx(nx, ny)] = 1;
-  snkPlot(hx, hy, 1);                         // old head becomes body
-  snkPlot(nx, ny, 2);                         // new head
-  if (eats) snkSpawnFood();
-}
-
-void snkInit() {
-  randomSeed(esp_random());
-  snkBest = 0;
-  snkLast = millis();
-  snkReset();
-}
-
-void updateSnake() {
-  unsigned long now = millis();
-  if (snkDeadAt) {
-    if ((long)(now - snkDeadAt) < 0) return;
-    snkReset();
-    snkLast = now;
-    return;
-  }
-  if (now - snkLast < SNK_STEP_MS) return;
-  snkLast = now;
-  snkMove();
-  lifeSpr.pushSprite(0, 0);
-}
-
-// ==== Rally (MODE_RALLY) ====
-// Blocky 3x5 digit font, MSB-left per row — authentic rally scoreboard.
-static const uint8_t RALLY_DIGITS[10][5] = {
-  {0b111,0b101,0b101,0b101,0b111},  // 0
-  {0b010,0b110,0b010,0b010,0b111},  // 1
-  {0b111,0b001,0b111,0b100,0b111},  // 2
-  {0b111,0b001,0b111,0b001,0b111},  // 3
-  {0b101,0b101,0b111,0b001,0b001},  // 4
-  {0b111,0b100,0b111,0b001,0b111},  // 5
-  {0b111,0b100,0b111,0b101,0b111},  // 6
-  {0b111,0b001,0b010,0b010,0b010},  // 7
-  {0b111,0b101,0b111,0b101,0b111},  // 8
-  {0b111,0b101,0b111,0b001,0b111}   // 9
-};
-
-static void rallyDigit(int d, int x, int y) {
-  for (int r = 0; r < 5; r++)
-    for (int c = 0; c < 3; c++)
-      if (RALLY_DIGITS[d][r] & (0b100 >> c))
-        lifeSpr.fillRect(x + c * 3, y + r * 3, 3, 3, 1);
-}
-
-static void rallyScoreDraw(int score, int x) {
-  if (score >= 10) {
-    rallyDigit(score / 10, x - 6, 36);
-    rallyDigit(score % 10, x + 6, 36);
-  } else {
-    rallyDigit(score, x, 36);
-  }
-}
-
-static void rallyServe(int dir) {
-  rallyBallX = 120; rallyBallY = 120;
-  rallyBallVX = 2.3f * dir;
-  rallyBallVY = (random(200) - 100) / 50.0f;      // -2..2
-  rallyServeDelay = 45;                            // freeze ~1.4 s at serve
-}
-
-void rallyInit() {
-  randomSeed(esp_random());
-  rallyScoreL = rallyScoreR = 0;
-  rallyFrame = 0;
-  rallyL.y = rallyR.y = 120;
-  rallyServe(random(2) ? 1 : -1);
-  lifeSpr.fillSprite(0);
-}
-
-static void rallyStepPaddle(RallyPaddle* pad, bool toward) {
-  if (rallyFrame % 45 == 0) pad->err = (random(200) - 100) / 4.0f;   // -25..25
-  float ty = toward ? (rallyBallY + pad->err) : 120.0f;
-  float dy = ty - pad->y;
-  if (dy > 2.8f) dy = 2.8f; else if (dy < -2.8f) dy = -2.8f;
-  pad->y += dy;
-  float lo = RALLY_TOP + RALLY_PAD_H / 2, hi = RALLY_BOT - RALLY_PAD_H / 2;
-  if (pad->y < lo) pad->y = lo;
-  if (pad->y > hi) pad->y = hi;
-}
-
-void updateRally() {
-  unsigned long now = millis();
-  if (now - lastRallyUpdate < 30) return;
-  lastRallyUpdate = now;
-  rallyFrame++;
-
-  // Paddle AI: track when the ball is coming, drift to center otherwise.
-  rallyStepPaddle(&rallyL, rallyBallVX < 0);
-  rallyStepPaddle(&rallyR, rallyBallVX > 0);
-
-  if (rallyServeDelay > 0) {
-    rallyServeDelay--;
-  } else {
-    rallyBallX += rallyBallVX;
-    rallyBallY += rallyBallVY;
-
-    // Walls
-    if (rallyBallY < RALLY_TOP + 2) { rallyBallY = RALLY_TOP + 2; rallyBallVY = fabsf(rallyBallVY); }
-    if (rallyBallY > RALLY_BOT - 2) { rallyBallY = RALLY_BOT - 2; rallyBallVY = -fabsf(rallyBallVY); }
-
-    // Paddle collisions (ball is a 4px square, +/-2 around center)
-    if (rallyBallVX < 0 && rallyBallX <= RALLY_PAD_X_L + 4 &&
-        rallyBallX >= RALLY_PAD_X_L - 8) {
-      if (fabsf(rallyBallY - rallyL.y) <= RALLY_PAD_H / 2 + 2) {
-        rallyBallX = RALLY_PAD_X_L + 4;
-        rallyBallVX = -rallyBallVX;
-        rallyBallVY += (rallyBallY - rallyL.y) * 0.09f;      // angle from hit spot
-        rallyBallVX *= 1.04f;                              // rally speeds up
-      }
-    }
-    if (rallyBallVX > 0 && rallyBallX >= RALLY_PAD_X_R - 4 &&
-        rallyBallX <= RALLY_PAD_X_R + 8) {
-      if (fabsf(rallyBallY - rallyR.y) <= RALLY_PAD_H / 2 + 2) {
-        rallyBallX = RALLY_PAD_X_R - 4;
-        rallyBallVX = -rallyBallVX;
-        rallyBallVY += (rallyBallY - rallyR.y) * 0.09f;
-        rallyBallVX *= 1.04f;
-      }
-    }
-    float sp = rallyBallVY;
-    if (sp > 5.0f) rallyBallVY = 5.0f; else if (sp < -5.0f) rallyBallVY = -5.0f;
-    if (rallyBallVX > 4.5f) rallyBallVX = 4.5f;
-    if (rallyBallVX < -4.5f) rallyBallVX = -4.5f;
-
-    // Score when the ball escapes a side, then serve toward the loser.
-    if (rallyBallX < -4) {
-      rallyScoreR++;
-      if (rallyScoreR >= 11) { rallyScoreL = 0; rallyScoreR = 0; }
-      rallyServe(-1);
-    } else if (rallyBallX > 244) {
-      rallyScoreL++;
-      if (rallyScoreL >= 11) { rallyScoreL = 0; rallyScoreR = 0; }
-      rallyServe(1);
-    }
-  }
-
-  // Draw
-  lifeSpr.fillSprite(0);
-  for (int y = RALLY_TOP; y < RALLY_BOT; y += 10)          // dashed center line
-    lifeSpr.fillRect(119, y, 2, 5, 1);
-  lifeSpr.fillRect(RALLY_PAD_X_L, (int)rallyL.y - RALLY_PAD_H / 2, 4, RALLY_PAD_H, 2);
-  lifeSpr.fillRect(RALLY_PAD_X_R, (int)rallyR.y - RALLY_PAD_H / 2, 4, RALLY_PAD_H, 2);
-  lifeSpr.fillRect((int)rallyBallX - 2, (int)rallyBallY - 2, 4, 4, 2);
-  rallyScoreDraw(rallyScoreL, 86);
-  rallyScoreDraw(rallyScoreR, 154);
-  lifeSpr.pushSprite(0, 0);
 }
 
 // ==== Eye (MODE_EQ): parked — quickdraw shooter took the slot ====
@@ -3920,176 +3176,6 @@ static void shUpdate() {
   if (dirty) lifeSpr.pushSprite(0, 0);
 }
 
-// ==== Deep Dig (MODE_DIG): gold-mine push-your-luck, hard hat with feet ====
-// DeepSeek-written module (dg-ds1). Tap = pick swing; cracks spread on their
-// own clock; stop ~1s and he climbs out and banks; cave-in = soft restart.
-static uint8_t dgPrev[60 * 60];
-static unsigned long dgLast = 0;
-static bool dgReady = false;
-
-static void dgPalette() {
-  lifeSpr.setPaletteColor(1,  tft.color565(255, 205, 60));   // hard hat
-  lifeSpr.setPaletteColor(2,  tft.color565(255, 185, 20));   // gold/vein
-  lifeSpr.setPaletteColor(3,  tft.color565(255, 245, 190));  // lamp/flash
-  lifeSpr.setPaletteColor(4,  tft.color565(48, 40, 34));     // crack
-  lifeSpr.setPaletteColor(5,  tft.color565(168, 130, 92));   // dust
-  lifeSpr.setPaletteColor(11, tft.color565(72, 50, 34));     // rock dark
-  lifeSpr.setPaletteColor(12, tft.color565(102, 73, 48));    // rock mid
-  lifeSpr.setPaletteColor(13, tft.color565(130, 95, 60));    // rock light
-  lifeSpr.setPaletteColor(14, tft.color565(255, 215, 70));   // vein-rich
-  lifeSpr.setPaletteColor(15, tft.color565(240, 228, 196));  // HUD/text
-}
-
-static void dgBlit(int x, int y, uint8_t slot) {
-  lifeSpr.fillRect(x * 4, y * 4, 4, 4, slot);
-}
-
-static void dgRepaintAll() {
-  lifeSpr.fillSprite(0);
-  for (int y = 0; y < 60; y++)
-    for (int x = 0; x < 60; x++) {
-      uint8_t s = dgCell(x, y);
-      dgPrev[y * 60 + x] = s;
-      if (s) dgBlit(x, y, s);
-    }
-  lifeSpr.pushSprite(0, 0);
-}
-
-static void dgStart() {
-  dgPalette();
-  dgInit((uint32_t)esp_random());
-  int self = dgSelfCheck();
-  dgLast = millis();
-  dgReady = true;
-  dgRepaintAll();
-  Serial.printf("[DG] new mine (self=%d)\n", self);
-}
-
-static void dgUpdate() {
-  if (!dgReady) return;
-  unsigned long now = millis();
-  uint32_t dt = (uint32_t)(now - dgLast);
-  dgLast = now;
-  if (dt > 250) dt = 250;            // never fast-forward after a hitch
-  dgTick(dt);
-  bool dirty = false;
-  for (int y = 0; y < 60; y++)
-    for (int x = 0; x < 60; x++) {
-      uint8_t s = dgCell(x, y);
-      int i = y * 60 + x;
-      if (s == dgPrev[i]) continue;
-      dgPrev[i] = s;
-      dgBlit(x, y, s);
-      dirty = true;
-    }
-  if (dirty) lifeSpr.pushSprite(0, 0);
-}
-
-// ==== Slabbed (MODE_SLAB): horizontal hard-rock push-your-luck ====
-// slab.cpp is the spec module from .scratch/bonsai-proto/m_slab1. The pod feeds
-// it real millisecond deltas and blits its 60x60 cell grid at 4 px/cell.
-static uint8_t slPrev[60 * 60];
-static unsigned long slLast = 0;
-static uint32_t slAcc = 0;
-static unsigned long slLogAt = 0;
-static bool slReady = false;
-
-static void slPalette() {
-  lifeSpr.setPaletteColor(0,  TFT_BLACK);
-  lifeSpr.setPaletteColor(1,  drawColor);                     // loader body
-  lifeSpr.setPaletteColor(2,  tft.color565(255, 178, 20));    // ore
-  lifeSpr.setPaletteColor(3,  tft.color565(255, 250, 210));   // scoop flash
-  lifeSpr.setPaletteColor(4,  tft.color565(26, 20, 16));      // cracks / tracks
-  lifeSpr.setPaletteColor(5,  tft.color565(168, 130, 92));    // dust
-  lifeSpr.setPaletteColor(11, tft.color565(70, 52, 38));      // rock dark
-  lifeSpr.setPaletteColor(12, tft.color565(105, 78, 55));     // rock mid
-  lifeSpr.setPaletteColor(13, tft.color565(140, 108, 76));    // rock light
-  lifeSpr.setPaletteColor(14, tft.color565(235, 96, 18));     // ore-rich
-  lifeSpr.setPaletteColor(15, accentColor);                   // HUD / text
-}
-
-static void slBlit(int x, int y, uint8_t slot) {
-  lifeSpr.fillRect(x * 4, y * 4, 4, 4, slot);
-}
-
-static void slRepaintAll() {
-  lifeSpr.fillSprite(0);
-  for (int y = 0; y < 60; y++)
-    for (int x = 0; x < 60; x++) {
-      uint8_t s = sbCellAt(x, y);
-      slPrev[y * 60 + x] = s;
-      if (s) slBlit(x, y, s);
-    }
-  lifeSpr.pushSprite(0, 0);
-}
-
-static void slStart() {
-  slPalette();
-  sbInit((uint32_t)esp_random());
-  slLast = millis();
-  slAcc = 0;
-  slLogAt = millis();
-  slReady = true;
-  slRepaintAll();
-  Serial.println("[SLAB] new run");
-}
-
-static void slUpdate() {
-  if (!slReady) return;
-  const unsigned long now = millis();
-  uint32_t dt = (uint32_t)(now - slLast);
-  slLast = now;
-  if (dt > 250) dt = 250;            // never fast-forward after a hitch
-  slAcc += dt;
-  if (slAcc < 25) return;            // ~40 fps grid refresh
-  const uint32_t step = slAcc;
-  slAcc = 0;
-  sbTick(step);
-  if (now - slLogAt >= 5000UL) {
-    int d, h, b, c, st, ai, vi;
-    sbStats(&d, &h, &b, &c, &st, &ai, &vi);
-    Serial.printf("[SLAB] d=%d h=%d b=%d c=%d s=%d ai=%d v=%d\n",
-                  d, h, b, c, st, ai, vi);
-    slLogAt = now;
-  }
-  bool dirty = false;
-  for (int y = 0; y < 60; y++)
-    for (int x = 0; x < 60; x++) {
-      uint8_t s = sbCellAt(x, y);
-      int i = y * 60 + x;
-      if (s == slPrev[i]) continue;
-      slPrev[i] = s;
-      slBlit(x, y, s);
-      dirty = true;
-    }
-  if (dirty) lifeSpr.pushSprite(0, 0);
-}
-
-static void slInteract() {
-  sbInteract();
-}
-
-void renderDisplay() {
-  switch (activeMode) {
-    case MODE_INDICATOR:   updateMarquee(); break;
-    case MODE_SALVO:       updateSalvo(); break;
-    case MODE_SLAB:        slUpdate(); break;
-    case MODE_STATIC:      updateLife(); break;
-    case MODE_NOW_PLAYING: updateNowPlaying(); break;
-    case MODE_BOIDS:       updateBoids(); break;
-    case MODE_BONSAI:      updateBonsai(); break;
-    case MODE_DBONSAI:     dnbUpdate(); break;
-    case MODE_FIRE:        updateFire(); break;
-    case MODE_KNIGHT:      updateKnight(); break;
-    case MODE_RADAR:       updateTama(); break;
-    case MODE_STARFIELD:   updateDla(); break;
-    case MODE_OSC:         updateSnake(); break;
-    case MODE_RALLY:        updateRally(); break;
-    case MODE_EQ:          shUpdate(); break;
-    case MODE_DIG:         dgUpdate(); break;
-  }
-}
-
 // ==========================================
 void setupButtons() {
   for (int i=0; i<3; i++) {
@@ -4149,11 +3235,23 @@ static void modeInteract() {
     case MODE_DBONSAI: dnbInteract(); break;
     case MODE_STATIC: lifeInteract(); break;
     case MODE_KNIGHT: krInteract();   break;
-    case MODE_SALVO:  svInteract();   break;
-    case MODE_EQ:     csInteract();   break;
-    case MODE_DIG:    dgInteract();   break;
-    case MODE_SLAB:   slInteract();    break;
-    default: break;                   // Fire, Lissajous, DLA, Rally: display only
+    default: break;                   // Fire, DLA: display only
+  }
+}
+
+void renderDisplay() {
+  switch (activeMode) {
+    case MODE_INDICATOR:   updateMarquee(); break;
+    case MODE_STATIC:      updateLife(); break;
+    case MODE_NOW_PLAYING: updateNowPlaying(); break;
+    case MODE_BOIDS:       updateBoids(); break;
+    case MODE_BONSAI:      updateBonsai(); break;
+    case MODE_DBONSAI:     dnbUpdate(); break;
+    case MODE_FIRE:        updateFire(); break;
+    case MODE_KNIGHT:      updateKnight(); break;
+    case MODE_RADAR:       updateTama(); break;
+    case MODE_STARFIELD:   updateDla(); break;
+    case MODE_EQ:          shUpdate(); break;
   }
 }
 

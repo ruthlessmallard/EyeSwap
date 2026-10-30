@@ -49,13 +49,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   final List<Map<String, dynamic>> _idleAnimations = [
     // --- Games: the button does something ---
-    {'id': 'salvo', 'name': 'Salvo', 'category': 'Games', 'icon': Icons.flag},
     {'id': 'knight', 'name': 'Knight Run', 'category': 'Games', 'icon': Icons.directions_run},
-    {'id': 'snake', 'name': 'Snake', 'category': 'Games', 'icon': Icons.videogame_asset},
-    {'id': 'rally', 'name': 'Rally', 'category': 'Games', 'icon': Icons.sports_tennis},
     {'id': 'eye', 'name': 'Quickdraw', 'category': 'Games', 'icon': Icons.adjust},
-    {'id': 'dig', 'name': 'Deep Dig', 'category': 'Games', 'icon': Icons.terrain},
-    {'id': 'slab', 'name': 'Slabbed', 'category': 'Games', 'icon': Icons.layers},
     // --- Pets: a persistent creature, one or two clicks ---
     {'id': 'pet', 'name': 'Goo Pet', 'category': 'Pets', 'icon': Icons.pets},
     {'id': 'boids', 'name': 'Fish', 'category': 'Pets', 'icon': Icons.water},

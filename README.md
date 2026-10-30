@@ -82,28 +82,29 @@ pass as a test; it is never saved as your choice.
 Selectable from the settings dropdown; the choice is saved and re-pushed on
 connect.
 
-| # | Mode | What it does |
-|---|------|--------------|
-| 0 | **Salvo** | WW1 artillery duel — 3-round groups bracket the target, camera stays at the receiving end |
-| 1 | **Game of Life** | Conway's Game of Life, 120×120 torus, reseeds when it dies/freezes |
-| 2 | **Now Playing** | PLAYING/PAUSED + title + artist card |
-| 3 | **Boids** | Flocking sim — "little fish" 🐟 |
-| 4 | **Langton's Ant** | Two-state turmite trail |
-| 5 | **Fire** | Doom-style rising flame |
-| 6 | **Knight Run** | Self-playing runner — hops hay bales and brick walls, ducks under arrows |
-| 7 | **Pipes** | 5 plumbers wandering a 7×7×7 lattice, ortho 3/4 view |
-| 8 | **Pet** | Ambient pixel-goo creature; feeds and tidies itself, no input |
-| 9 | **Crystal** | Diffusion-limited aggregation; grows, holds, regrows |
-| 10 | **Snake** | Self-playing snake with lookahead survival check |
-| 11 | **Rally** | Self-playing paddle rally, blocky scoreboard digits |
-| 12 | **Eye** | Pixel eyeball — human/cat/goat/robot, drifts when bored, snaps when something catches it |
-| — | **Random Cycle** | Auto-rotates through the visual roster every **10 minutes** |
+| Mode | What it does |
+|------|--------------|
+| **Game of Life** | Conway's Game of Life, 120×120 torus, reseeds when it dies/freezes |
+| **Now Playing** | PLAYING/PAUSED + title + artist card |
+| **Boids** | Flocking sim — "little fish" 🐟 |
+| **Bonsai Wild** | Clockwork colony that builds wood, drops leaves, and dies back |
+| **Bonsai Trained** | Authored skeleton, accreted foliage |
+| **Fire** | Doom-style rising flame |
+| **Knight Run** | Self-playing runner — hops hay bales and brick walls, ducks under arrows |
+| **Pet** | Ambient pixel-goo creature; feeds, plays, and tidies itself |
+| **Crystal** | Diffusion-limited aggregation; grows, holds, regrows |
+| **Quickdraw** | Pixel eyeball duel — draw on the tell |
+| **Random Cycle** | Auto-rotates through the ambient roster every **10 minutes** |
+
+Random Cycle runs Game of Life, Boids, Fire, Knight Run, Pet, and Crystal.
+Quickdraw, both bonsai builds, and Now Playing are pick-only: they are things
+you choose, not background ambience.
 
 **Two-tone color:** every animation uses a **primary** and an **accent** color.
 The accent highlights the element that should pop — the white-hot core of the
-fire, every fifth boid, the ant itself, pipe joints/end caps, the radar sweep
-creature's eyes, crystal rim, the snake's head + pellet, rally paddles + ball, the eyeball's iris, the knight's plume + blade, the runner's high score, the incoming shells and impact bursts, and
-the EQ peak-hold caps. Set **Accent = primary** (or hit **Match primary**) for
+fire, every fifth boid, the goo creature's eyes, crystal rim, the eyeball's
+iris, the knight's plume + blade, and the runner's high score. Set
+**Accent = primary** (or hit **Match primary**) for
 a single-color look. Both colors ride in the config packet and persist in NVS.
 
 ### Controls
@@ -210,10 +211,12 @@ BLE UUIDs (must match the Flutter app exactly):
 {"type":"config","brightness_offset":0,"bg_color":"#FFAA00","accent_color":"#0066FF"}
 
 // App → ESP32 animation mode
-//   salvo | static | now_playing | boids | ant | fire | knight | pipes |
-//   pet | crystal | snake | rally | eye | cycle
-//   (legacy aliases still accepted: radar, starfield, oscilloscope, pong, eq)
+//   static | now_playing | boids | ant | bonsai | fire | knight |
+//   pet | crystal | eye | cycle
+//   (legacy aliases still accepted: radar, starfield, eq)
 //   ("marquee" is accepted but only runs one indicator pass; it is not a mode)
+//   Add "resync":true when re-pushing stored settings on connect -- the pod
+//   ignores a resync while it is Random Cycling, so a reconnect cannot stop it.
 {"type":"mode","animation":"fire"}
 {"type":"mode","animation":"cycle"}   // Random Cycle ("random" also accepted)
 
