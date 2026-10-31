@@ -1,20 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../services/esp32_ble.dart';
+import '../services/ble_handler.dart';
 import 'button_config_screen.dart';
 
 /// Settings screen for configuring ESP32 display
 /// Brightness offset and background color
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, required this.bleHandler});
+
+  /// The controller's live BLE handler. Settings must never open its own
+  /// connection: the pod accepts one client, so a second one boots the first.
+  final BleHandler bleHandler;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final ESP32BLEService _bleService = ESP32BLEService();
-  
   // Brightness offset: -50 to +50, default 0
   double _brightnessOffset = 0;
   
@@ -67,7 +69,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _bleService.initialize();
     _loadSettings();
   }
   
@@ -97,7 +98,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // Push the mode to the hardware. If it isn't connected yet, the choice is
     // still saved and applied on the next connect.
-    final sent = await _bleService.sendIdleAnimation(animation);
+    final sent = await widget.bleHandler.sendMode(animation);
     if (sent) {
       _setStatus('Idle animation: $animation');
     } else {
@@ -105,10 +106,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _bleService.dispose();
-    super.dispose();
+  /// '#RRGGBB' uppercase, matching the firmware's parser.
+  static String _rgbHex(Color c) {
+    final v = '${c.red.toRadixString(16).padLeft(2, '0')}'
+        '${c.green.toRadixString(16).padLeft(2, '0')}'
+        '${c.blue.toRadixString(16).padLeft(2, '0')}';
+    return '#${v.toUpperCase()}';
   }
 
   void _setStatus(String message) {
@@ -146,10 +149,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       '${_selectedAccent.blue.toRadixString(16).padLeft(2, '0')}',
     );
 
-    final success = await _bleService.sendConfig(
+    final success = await widget.bleHandler.sendDisplayConfig(
       brightnessOffset: _brightnessOffset.toInt(),
-      color: _selectedColor,
-      accent: _selectedAccent,
+      colorHex: _rgbHex(_selectedColor),
+      accentHex: _rgbHex(_selectedAccent),
     );
     
     setState(() {
@@ -168,9 +171,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _isSending = true;
     });
     
-    final success = await _bleService.sendTestFlash(
-      _selectedColor,
-      _brightnessOffset.toInt(),
+    final success = await widget.bleHandler.sendDisplayConfig(
+      brightnessOffset: _brightnessOffset.toInt(),
+      colorHex: _rgbHex(_selectedColor),
+      accentHex: _rgbHex(_selectedAccent),
     );
     
     setState(() {

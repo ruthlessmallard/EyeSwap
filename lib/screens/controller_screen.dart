@@ -288,7 +288,8 @@ class _ControllerScreenState extends State<ControllerScreen> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => const SettingsScreen(),
+                        builder: (context) =>
+                            SettingsScreen(bleHandler: _bleHandler),
                       ),
                     );
                   },
