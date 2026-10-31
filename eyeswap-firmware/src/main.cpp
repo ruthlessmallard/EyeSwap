@@ -229,12 +229,14 @@ static unsigned long lastFishTap = 0;
 #if BN_FAST_TEST
 #define BN_LEAF_MS    30UL
 #define BN_WOOD_PER_PX 1UL
-#define BN_WOOD_MIN   2000UL
+#define BN_WOOD_MIN   200UL        // bench: wood keeps up with the canopy
+#define BN_WOOD_STEPS 3            // deposits per beat while fast
 #define BN_REPLANT_MS 240000UL    // fresh tree every 4 min while fast
 #else
 #define BN_LEAF_MS    800UL       // one leaf per beat until the canopy is even
 #define BN_WOOD_PER_PX 1UL        // extra ms per existing wood pixel
 #define BN_WOOD_MIN   2000UL
+#define BN_WOOD_STEPS 1
 #endif
 #define BN_BOLE_Y     (BN_GRND - 30)   // bare bole: no leaves, no wood below this
 #define BN_LEAF_PER_WOOD 2             // leaves a leaf-bearing wood pixel supports
@@ -390,12 +392,12 @@ static void bnWoodStep() {
   int bx = 0, by = 0;
   if (!bnPickFrontIn(1, 3, &bx, &by)) return;
   const float ang = (float)(bnRand() % 360) * 0.0174533f;
-  const int rad = 7 + (int)(bnRand() % 9);
+  const int rad = 4 + (int)(bnRand() % 7);
   int wx = bx + (int)lroundf(cosf(ang) * (float)rad);
   int wy = by + (int)lroundf(sinf(ang) * (float)rad);
   if (bnAt(wx, wy)) return;
   for (int step = 0; step < 900; step++) {
-    if (wy >= BN_BOLE_Y) return;              // drifted into the no-growth zone
+    if (wy >= BN_BOLE_Y) wy = BN_BOLE_Y - 2;  // steer back above the bole
     for (int k = 0; k < 4; k++) {
       const int nx = wx + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
       const int ny = wy + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
@@ -419,26 +421,46 @@ static void bnWoodStep() {
   }
 }
 
-static bool bnAddLeaf() {
-  int x = 0, y = 0;
-  if (!bnPickFrontIn(1, 1, &x, &y)) return false;   // twig fringe only
-  for (int k = 0; k < 4; k++) {
-    const int nx = x + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
-    const int ny = y + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
-    if (bnAt(nx, ny)) continue;
-    if (bnLeafN >= BN_LEAF_MAX) return false;
-    bnLeaf[bnLeafN].x = (int16_t)(nx + (int)(bnRand() % 3) - 1);
-    bnLeaf[bnLeafN].y = (int16_t)(ny + (int)(bnRand() % 3) - 1);
-    bnLeaf[bnLeafN].alive = 1;
-    bnLeafN++;
-    bnLeafAlive++;
-    return true;
-  }
+// A leaf owns exactly one cell. Two leaves must never share one: the canopy is
+// the tree's only currency, so it has to be countable on screen and in the
+// gate that unlocks wood.
+static bool bnLeafAt(int x, int y) {
+  for (int i = 0; i < bnLeafN; i++)
+    if (bnLeaf[i].alive && bnLeaf[i].x == x && bnLeaf[i].y == y) return true;
   return false;
 }
 
+static bool bnAddLeaf() {
+  int x = 0, y = 0;
+  if (!bnPickFrontIn(1, 1, &x, &y)) return false;   // twig fringe only
+  int cx[4], cy[4], n = 0;
+  for (int k = 0; k < 4; k++) {
+    const int nx = x + ((k == 1) ? 1 : (k == 3) ? -1 : 0);
+    const int ny = y + ((k == 0) ? -1 : (k == 2) ? 1 : 0);
+    if (bnAt(nx, ny)) continue;                     // wood in the way
+    if (ny >= BN_BOLE_Y) continue;                  // no leaves down the bole
+    if (bnLeafAt(nx, ny)) continue;                 // one leaf per cell
+    cx[n] = nx; cy[n] = ny; n++;
+  }
+  if (!n) return false;                             // every neighbour taken
+  const int pick = (int)(bnRand() % (uint32_t)n);
+  int slot = -1;
+  for (int i = 0; i < bnLeafN; i++)                 // recycle a dropped slot
+    if (!bnLeaf[i].alive) { slot = i; break; }
+  if (slot < 0) {
+    if (bnLeafN >= BN_LEAF_MAX) return false;
+    slot = bnLeafN++;
+  }
+  bnLeaf[slot].x = (int16_t)cx[pick];
+  bnLeaf[slot].y = (int16_t)cy[pick];
+  bnLeaf[slot].alive = 1;
+  bnLeafAlive++;
+  return true;
+}
+
+// Twigs are the only leaf-bearing wood, so the target scales with them.
 static int bnLeafTarget() {
-  int t = (int)(bnLeafWood / BN_LEAF_PER_WOOD);
+  int t = (int)bnLeafWood * BN_LEAF_PER_WOOD;
   return (t > BN_LEAF_MAX) ? BN_LEAF_MAX : t;
 }
 
@@ -527,8 +549,10 @@ static void bnTick() {
     unsigned long interval = BN_WOOD_MIN + (unsigned long)BN_WOOD_PER_PX * bnWoodN;
     if (now - bnLastWood >= interval) {
       bnLastWood = now;
-      if (bnRand() % 100 < 70) bnWoodStep();
-      else bnThicken();
+      for (int s = 0; s < BN_WOOD_STEPS; s++) {
+        if (bnRand() % 100 < 70) bnWoodStep();
+        else bnThicken();
+      }
     }
   }
   if (bnWoodN > BN_WOOD_MAX) bnWoodN = BN_WOOD_MAX;
