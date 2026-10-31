@@ -69,7 +69,7 @@ enum DisplayMode {
   MODE_STATIC    = 1,
   MODE_NOW_PLAYING = 2,
   MODE_BOIDS     = 3,
-  MODE_BONSAI    = 4,
+  // MODE_BONSAI    = 4,   // cut 2026-10-30; value kept so old NVS saves never renumber
   MODE_FIRE      = 5,
   MODE_KNIGHT    = 6,
   MODE_RADAR     = 7,
@@ -80,7 +80,7 @@ enum DisplayMode {
 static bool modeValid(uint8_t v) {
   switch (v) {
     case MODE_STATIC: case MODE_NOW_PLAYING: case MODE_BOIDS:
-    case MODE_BONSAI: case MODE_FIRE: case MODE_KNIGHT: case MODE_RADAR:
+    case MODE_FIRE: case MODE_KNIGHT: case MODE_RADAR:
     case MODE_STARFIELD: case MODE_EQ:
       return true;
     default:
@@ -218,6 +218,7 @@ static unsigned long lastFishTap = 0;
 #define FISH_BOTTOM_Y  206
 
 
+#if 0 // bonsai cut 2026-10-30 — code kept for reference; entry points removed below
 // ==== Bonsai (MODE_BONSAI): DLA wood, foliage gates the growth ====
 // A trunk is planted; walkers accrete wood one pixel at a time (crystal
 // rules). Leaves scale with wood mass; wood only advances once the canopy has
@@ -634,6 +635,7 @@ void updateBonsai() {
 }
 
 
+#endif // end bonsai cut
 
 // ==== Fire (MODE_FIRE): forest-fire percolation (Drossel-Schwabl) ====
 // Four states in 2 bits/cell: 0 bare ground, 1 tree, 2 burning, 3 ember.
@@ -992,8 +994,7 @@ void boidInit();
 void updateBoids();
 #if 0
 #endif
-void bnStart();
-void updateBonsai();
+// bonsai cut 2026-10-30: bnStart()/updateBonsai() removed with the #if 0 block
 void fireInit();
 void updateFire();
 void knightInit();
@@ -1041,7 +1042,7 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "static") == 0)      { pendingMode = MODE_STATIC;      modeDirty = true; }
       else if (strcmp(anim, "now_playing") == 0) { pendingMode = MODE_NOW_PLAYING; modeDirty = true; }
       else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
-      else if (strcmp(anim, "ant") == 0) { pendingMode = MODE_BONSAI; modeDirty = true; }
+      // bonsai cut 2026-10-30: "ant" now falls through to the unknown-anim log line
       else if (strcmp(anim, "fire") == 0)        { pendingMode = MODE_FIRE;        modeDirty = true; }
       else if (strcmp(anim, "knight") == 0 || strcmp(anim, "run") == 0 || strcmp(anim, "jump") == 0) { pendingMode = MODE_KNIGHT; modeDirty = true; }
       else if (strcmp(anim, "radar") == 0 || strcmp(anim, "pet") == 0) { pendingMode = MODE_RADAR; modeDirty = true; }
@@ -1153,7 +1154,7 @@ void setup() {
 
 // ==========================================
 void loop() {
-  bnTick();                                  // the tree grows whether or not it is shown
+  // bnTick();  // bonsai cut 2026-10-30                                  // the tree grows whether or not it is shown
   updateTama();                              // the ghost lives whether or not it is shown
   handleButtons();
   if (cycleStart) {                          // Random Cycle: start now
@@ -1254,7 +1255,7 @@ void setupTFT() {
   lifeSpr.setColorDepth(4);
   lifeSpr.createSprite(LIFE_W * LIFE_CELL, LIFE_H * LIFE_CELL);
   setStandardPalette();
-  bnLoad();
+  // bnLoad();  // bonsai cut 2026-10-30
   lifeSpriteReady = true;
   
   // First ticker frame is rendered by updateMarquee().
@@ -1419,8 +1420,7 @@ void setDisplayMode(DisplayMode mode, bool remember) {
     lifeSeed();
   } else if (mode == MODE_BOIDS) {
     boidInit();
-  } else if (mode == MODE_BONSAI) {
-    bnStart();  } else if (mode == MODE_FIRE) {
+  } else if (mode == MODE_FIRE) {
     fireInit();
   } else if (mode == MODE_KNIGHT) {
     knightInit();
@@ -3014,7 +3014,6 @@ static void modeInteract() {
   switch (activeMode) {
     case MODE_RADAR:  tamaInteract(); break;
     case MODE_BOIDS:  fishInteract(); break;
-    case MODE_BONSAI: bnInteract();   break;
     case MODE_STATIC: lifeInteract(); break;
     case MODE_KNIGHT: krInteract();   break;
     default: break;                   // Fire, DLA: display only
@@ -3027,7 +3026,6 @@ void renderDisplay() {
     case MODE_STATIC:      updateLife(); break;
     case MODE_NOW_PLAYING: updateNowPlaying(); break;
     case MODE_BOIDS:       updateBoids(); break;
-    case MODE_BONSAI:      updateBonsai(); break;
     case MODE_FIRE:        updateFire(); break;
     case MODE_KNIGHT:      updateKnight(); break;
     case MODE_RADAR:       updateTama(); break;

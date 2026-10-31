@@ -87,7 +87,6 @@ connect.
 | **Game of Life** | Conway's Game of Life, 120×120 torus, reseeds when it dies/freezes |
 | **Now Playing** | PLAYING/PAUSED + title + artist card |
 | **Boids** | Flocking sim — "little fish" 🐟 |
-| **Bonsai Wild** | Builds wood, hangs leaves, drops them and dies back |
 | **Fire** | Doom-style rising flame |
 | **Knight Run** | Self-playing runner — hops hay bales and brick walls, ducks under arrows |
 | **Pet** | Ambient pixel-goo creature; feeds, plays, and tidies itself |
@@ -96,8 +95,8 @@ connect.
 | **Random Cycle** | Auto-rotates through the ambient roster every **10 minutes** |
 
 Random Cycle runs Game of Life, Boids, Fire, Knight Run, Pet, and Crystal.
-Quickdraw, Bonsai Wild, and Now Playing are pick-only: they are things
-you choose, not background ambience.
+Quickdraw and Now Playing are pick-only: they are things you choose, not
+background ambience.
 
 **Two-tone color:** every animation uses a **primary** and an **accent** color.
 The accent highlights the element that should pop — the white-hot core of the
@@ -169,7 +168,7 @@ GC9A01 round display and BLE communication.
 - Button press detection (tap / long-press)
 - Display brightness + **two-tone color** config (brightness approximated by
   color scaling — no backlight pin)
-- **12 idle animations + Random Cycle** (see table above)
+- **8 idle animations + Random Cycle** (see table above)
 - **Random Cycle** persists across power cycles (NVS), and any explicit pick
   cancels it
 - **Settings persistence**: mode, brightness, primary color, accent color, and
@@ -210,7 +209,7 @@ BLE UUIDs (must match the Flutter app exactly):
 {"type":"config","brightness_offset":0,"bg_color":"#FFAA00","accent_color":"#0066FF"}
 
 // App → ESP32 animation mode
-//   static | now_playing | boids | ant | fire | knight |
+//   static | now_playing | boids | fire | knight |
 //   pet | crystal | eye | cycle
 //   (legacy aliases still accepted: radar, starfield, eq)
 //   ("marquee" is accepted but only runs one indicator pass; it is not a mode)

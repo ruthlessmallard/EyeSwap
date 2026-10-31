@@ -59,7 +59,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // --- Living systems: no input, they just grow ---
     {'id': 'static', 'name': 'Game of Life', 'category': 'Living', 'icon': Icons.grain},
     {'id': 'fire', 'name': 'Fire', 'category': 'Living', 'icon': Icons.local_fire_department},
-    {'id': 'ant', 'name': 'Bonsai Wild', 'category': 'Living', 'icon': Icons.park},
     {'id': 'crystal', 'name': 'Crystal', 'category': 'Living', 'icon': Icons.diamond},
     // --- Utility ---
     {'id': 'now_playing', 'name': 'Now Playing', 'category': 'Utility', 'icon': Icons.music_note},
