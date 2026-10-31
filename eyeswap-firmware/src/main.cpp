@@ -687,12 +687,13 @@ static unsigned long tTapLast = 0;
 
 static const uint8_t POOP_X[3] = { 36, 104, 172 };
 static int16_t tGx = 120, tGxTarget = 120;  // wander position, centre px
+static int8_t  tFace = 1;                   // +1 faces right, -1 mirrored
 static unsigned long tWanderAt = 0;
 
 // Blit one sprite frame bottom-centre anchored on the cell grid. Unset cells
 // are left untouched, so the art reads as a hollow outline. While substance
 // is low the ghost is dithered (odd-parity cells skipped) to look faded.
-static void ghostBlit(const GhostAnim& a, uint8_t frame, int cx, int bottomY) {
+static void ghostBlit(const GhostAnim& a, uint8_t frame, int cx, int bottomY, bool flip) {
   const int bpr = (a.w + 7) / 8;
   if (frame >= a.n) frame = (uint8_t)(a.n - 1);
   const uint8_t* f = a.bits + (uint32_t)frame * (uint32_t)bpr * a.h;
@@ -702,8 +703,9 @@ static void ghostBlit(const GhostAnim& a, uint8_t frame, int cx, int bottomY) {
   const bool fade = (tSub <= 20);
   for (int r = 0; r < a.h; r++) {
     for (int c = 0; c < a.w; c++) {
-      const uint8_t byte = pgm_read_byte(f + r * bpr + (c >> 3));
-      if (!(byte & (0x80 >> (c & 7)))) continue;
+      const int sc = flip ? (a.w - 1 - c) : c;   // mirror when facing left
+      const uint8_t byte = pgm_read_byte(f + r * bpr + (sc >> 3));
+      if (!(byte & (0x80 >> (sc & 7)))) continue;
       if (fade && ((c + r) & 1)) continue;
       lifeSpr.fillRect(x0 + c * GHOST_CELL, y0 + r * GHOST_CELL,
                        GHOST_CELL, GHOST_CELL, 1);
@@ -895,9 +897,11 @@ void updateTama() {
     if (now >= tWanderAt) {
       tWanderAt = now + 4000UL + random(8000UL);
       tGxTarget = (int16_t)(56 + random(128));   // keep the widest frame on screen
+      if (random(100) < 30) tFace = (int8_t)-tFace;  // idle look-around
     }
     if (tGx != tGxTarget) {
       const int step = (int)((dt * 12 + 500) / 1000);  // ~12 px/s drift
+      tFace = (tGx < tGxTarget) ? 1 : -1;              // face the way he floats
       if (tGx < tGxTarget) { tGx += step; if (tGx > tGxTarget) tGx = tGxTarget; }
       else                 { tGx -= step; if (tGx < tGxTarget) tGx = tGxTarget; }
     }
@@ -918,20 +922,20 @@ void updateTama() {
     if (tHibAt && now - tHibAt < 700UL)       f = 0;
     else if (tHibAt && now - tHibAt < 1400UL) f = 1;
     const int lift = (tOfferFxUntil > now) ? 6 : 0;
-    ghostBlit(GHOST_HIBER, f, cx, 200 - lift);
+    ghostBlit(GHOST_HIBER, f, cx, 200 - lift, tFace < 0);
     if (tOfferFxUntil > now) {          // the noodle offering hovering above
       lifeSpr.fillRect(cx - 12, 40, 26, 4, 2);
       lifeSpr.fillRect(cx - 12, 36, 4, 4, 2);
     }
   } else if (tSleep) {
-    ghostBlit(GHOST_SLEEP, (uint8_t)(2 + ((now / GHOST_SLEEP.frameMs) % 3)), cx, GHOST_FLOOR_Y);
+    ghostBlit(GHOST_SLEEP, (uint8_t)(2 + ((now / GHOST_SLEEP.frameMs) % 3)), cx, GHOST_FLOOR_Y, tFace < 0);
   } else if (tEatUntil) {
-    ghostBlit(GHOST_EAT, ghostFrameAt(GHOST_EAT, tEatStart, now), cx, GHOST_FLOOR_Y);
+    ghostBlit(GHOST_EAT, ghostFrameAt(GHOST_EAT, tEatStart, now), cx, GHOST_FLOOR_Y, tFace < 0);
   } else if (tBoopUntil) {
-    ghostBlit(GHOST_BOOP, (uint8_t)(el / GHOST_BOOP.frameMs), cx, GHOST_FLOOR_Y);
+    ghostBlit(GHOST_BOOP, (uint8_t)(el / GHOST_BOOP.frameMs), cx, GHOST_FLOOR_Y, tFace < 0);
   } else {
     const int lift = (tCleanFxUntil > now) ? 8 : 0;   // little hop after cleaning
-    ghostBlit(GHOST_IDLE, ghostFrameAt(GHOST_IDLE, 0, now), cx, GHOST_FLOOR_Y - lift);
+    ghostBlit(GHOST_IDLE, ghostFrameAt(GHOST_IDLE, 0, now), cx, GHOST_FLOOR_Y - lift, tFace < 0);
   }
 
   // ---- puddles on the floor ----
