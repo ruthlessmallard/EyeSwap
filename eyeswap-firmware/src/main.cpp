@@ -678,7 +678,7 @@ static uint16_t tHibMin = 0;            // minutes spent hibernating
 static uint8_t tTapCount = 0;
 static unsigned long tTapLast = 0;
 #define TAP_WINDOW_MS   450UL      // taps inside this window count as one burst
-#define DRY_AFTER_MS    900000UL   // 15 min pinned at zero substance -> hibernate
+#define DRY_AFTER_MS    1800000UL  // 30 min pinned at zero substance -> hibernate
 #define AUTOSLEEP_MS    1800000UL  // 30 min idle with both meters low -> sleep
 #define HIB_REVIVE_MIN  30         // backstop: wake up on its own after 30 min
 #define OFFER_NEED      3          // offerings needed to revive
@@ -686,6 +686,8 @@ static unsigned long tTapLast = 0;
 #define GHOST_FLOOR_Y   170        // bottom edge of the ghost's cell grid
 
 static const uint8_t POOP_X[3] = { 36, 104, 172 };
+static int16_t tGx = 120, tGxTarget = 120;  // wander position, centre px
+static unsigned long tWanderAt = 0;
 
 // Blit one sprite frame bottom-centre anchored on the cell grid. Unset cells
 // are left untouched, so the art reads as a hollow outline. While substance
@@ -757,7 +759,7 @@ static void tamaHibernate(unsigned long now) {
   tHibMin = 0;
   tHibAt = now;
   tSleep = false;
-  tPoopAt = now + 180000UL + random(120000UL);
+  tPoopAt = now + 1200000UL + random(1200000UL);
   tamaSave();
 }
 
@@ -829,7 +831,7 @@ void updateTama() {
   const unsigned long dt = now - tLastTick;
   tLastTick = now;
   if (!tLastInteract) tLastInteract = now;
-  if (!tPoopAt) tPoopAt = now + 180000UL + random(120000UL);
+  if (!tPoopAt) tPoopAt = now + 1200000UL + random(1200000UL);
 
   // ---- tap burst resolution (after the multi-tap window) ----
   if (tTapCount && now - tTapLast > TAP_WINDOW_MS) {
@@ -856,14 +858,14 @@ void updateTama() {
     const uint32_t budget = tSleep ? (uint32_t)(dt / 2) : (uint32_t)dt;
     tSubAcc   += budget;
     tHappyAcc += budget;
-    if (tSubAcc >= 20000UL) { tSubAcc = 0; if (tSub) tSub--; }
-    if (tHappyAcc >= (tPoops ? 20000UL : 45000UL)) {
+    if (tSubAcc >= 40000UL) { tSubAcc = 0; if (tSub) tSub--; }
+    if (tHappyAcc >= (tPoops ? 30000UL : 60000UL)) {
       tHappyAcc = 0;
       if (tHappy) tHappy--;
     }
   }
 
-  // ---- hibernation: zero substance for 15 min while awake ----
+  // ---- hibernation: zero substance for 30 min while awake ----
   if (!tHiber && !tSleep) {
     if (tSub == 0) {
       if (!tSubZeroAt) tSubZeroAt = now;
@@ -882,10 +884,23 @@ void updateTama() {
     tamaSave();
   }
 
-  // ---- ectoplasm puddles: 3-5 min, awake only, cap 3 ----
+  // ---- ectoplasm puddles: 20-40 min, awake only, cap 3 ----
   if (!tSleep && !tHiber && now >= tPoopAt && tPoops < 3) {
     tPoops++;
-    tPoopAt = now + 180000UL + random(120000UL);
+    tPoopAt = now + 1200000UL + random(1200000UL);
+  }
+
+  // ---- wander: pick a drift target now and then, glide toward it ----
+  if (!tSleep && !tHiber) {
+    if (now >= tWanderAt) {
+      tWanderAt = now + 4000UL + random(8000UL);
+      tGxTarget = (int16_t)(56 + random(128));   // keep the widest frame on screen
+    }
+    if (tGx != tGxTarget) {
+      const int step = (int)((dt * 12 + 500) / 1000);  // ~12 px/s drift
+      if (tGx < tGxTarget) { tGx += step; if (tGx > tGxTarget) tGx = tGxTarget; }
+      else                 { tGx -= step; if (tGx < tGxTarget) tGx = tGxTarget; }
+    }
   }
 
   // ---- persistence every 5 min ----
@@ -895,7 +910,7 @@ void updateTama() {
 
   // ---- draw ----
   lifeSpr.fillSprite(0);
-  const int cx = 120;
+  const int cx = tGx;
   const unsigned long el = tBoopStart ? (now - tBoopStart) : 0;
 
   if (tHiber) {
