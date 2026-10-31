@@ -928,7 +928,7 @@ void updateTama() {
       lifeSpr.fillRect(cx - 12, 36, 4, 4, 2);
     }
   } else if (tSleep) {
-    ghostBlit(GHOST_SLEEP, (uint8_t)((now / GHOST_SLEEP.frameMs) % GHOST_SLEEP.n), cx, GHOST_FLOOR_Y, tFace < 0);
+    ghostBlit(GHOST_SLEEP, (uint8_t)(2 + ((now / GHOST_SLEEP.frameMs) % 3)), cx, GHOST_FLOOR_Y, tFace < 0);
   } else if (tEatUntil) {
     ghostBlit(GHOST_EAT, ghostFrameAt(GHOST_EAT, tEatStart, now), cx, GHOST_FLOOR_Y, tFace < 0);
   } else if (tBoopUntil) {
