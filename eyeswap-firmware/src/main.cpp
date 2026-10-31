@@ -696,15 +696,14 @@ static unsigned long tWanderAt = 0;
 static void ghostBlit(const GhostAnim& a, uint8_t frame, int cx, int bottomY, bool flip) {
   const int bpr = (a.w + 7) / 8;
   if (frame >= a.n) frame = (uint8_t)(a.n - 1);
-  const uint8_t* f = ((flip && a.bitsL) ? a.bitsL : a.bits) + (uint32_t)frame * (uint32_t)bpr * a.h;
+  const uint8_t* f = a.bits + (uint32_t)frame * (uint32_t)bpr * a.h;
   int x0 = cx - (a.w * GHOST_CELL) / 2;
   x0 &= ~(GHOST_CELL - 1);              // stay on the 4px cell grid
   const int y0 = bottomY - a.h * GHOST_CELL;
   const bool fade = (tSub <= 20);
   for (int r = 0; r < a.h; r++) {
     for (int c = 0; c < a.w; c++) {
-      int sc = c;
-      if (flip && !a.bitsL) sc = a.w - 1 - c;   // runtime mirror only when no pre-mirrored set
+      const int sc = flip ? (a.w - 1 - c) : c;   // mirror when facing left
       const uint8_t byte = pgm_read_byte(f + r * bpr + (sc >> 3));
       if (!(byte & (0x80 >> (sc & 7)))) continue;
       if (fade && ((c + r) & 1)) continue;
