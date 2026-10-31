@@ -5,6 +5,7 @@
 // ==========================================
 
 #include "shooter.h"
+#include "ghost_sprites.h"
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -653,58 +654,111 @@ static void ffBuildPalette();             // fire palette follows the user colou
 static void ffRepaint();
 static uint32_t ffFlicker = 0;            // per-tick seed for flame flicker
 
-// ==== Pet (MODE_RADAR slot): a small persistent goo creature ====
-// Two meters, one button. Food falls on one side of the face; the goo walks
-// over and eats it. Left with hunger at zero long enough it dries into a
-// crust: it cannot walk, but stretches a pseudopod to food dropped beside it.
+// ==== Pet (MODE_RADAR slot): a persistent little ghost ====
+// Ghost only. One button, three taps. "Substance" is the old hunger meter and
+// keeps its NVS key so existing saves carry over; happy/poops/age keys are
+// unchanged. Zero substance for long enough and it hibernates on its slab.
 #define TAMA_TICK_MS 110
 static Preferences tamaPrefs;
-static uint8_t tHunger = 80, tHappy = 70, tPoops = 0;
+static uint8_t tSub = 80, tHappy = 70, tPoops = 0;
 static uint16_t tAgeMin = 0;
 static unsigned long tLastTick = 0, tLastSave = 0;
-static unsigned long tEatUntil = 0, tPlayUntil = 0;
-static unsigned long tBlinkAt = 0, tBlinkUntil = 0, tPoopAt = 0;
-static uint32_t tHungerAcc = 0, tHappyAcc = 0, tMinuteAcc = 0;
-static int16_t tOffX = 0;              // pixel offset from centre
-static int8_t tDir = 1;
-static unsigned long tWanderAt = 0;
-static bool tFoodOn = false;
-static int8_t tFoodSide = 0;
-static int16_t tFoodX = 0, tFoodY = 0;
-static unsigned long tFoodLandedAt = 0;
-static unsigned long tPlayStart = 0;   // when the current play animation began
-static int tPlayKind = 0;              // 0 = squish, 1 = lift/drop/bounce
-static bool tDry = false;
-static unsigned long tDrySince = 0;
-static bool tTapPending = false;
-static unsigned long tTapAt = 0;
-#define TAP_WINDOW_MS   450UL      // second press inside this is a double tap
-#define DRY_AFTER_MS    900000UL   // 15 min pinned at zero hunger dries it out
-#define DRY_WAKE_HUNGER 40         // eat back to here and it can move again
-#define FOOD_FLOOR_Y    178
-#define GOO_CELL 4
-static float tGooPhase = 0.0f;
-static int8_t tDripRow = -1, tDripSide = 1;
-static uint8_t tPuddlePulse = 0;
-static inline int gooRowOff(int r) {
-  return (int)lroundf(1.3f * sinf(r * 0.62f - tGooPhase));
+static unsigned long tBoopStart = 0, tBoopUntil = 0;
+static unsigned long tEatStart = 0, tEatUntil = 0;
+static unsigned long tPoopAt = 0;
+static unsigned long tSubZeroAt = 0;
+static unsigned long tLastInteract = 0;
+static unsigned long tOfferFxUntil = 0, tCleanFxUntil = 0;
+static unsigned long tHibAt = 0;
+static uint32_t tSubAcc = 0, tHappyAcc = 0, tMinuteAcc = 0;
+static bool tSleep = false;
+static bool tHiber = false;             // soft death: resting on the slab
+static uint8_t tOffer = 0;              // noodle offerings while hibernating
+static uint16_t tHibMin = 0;            // minutes spent hibernating
+static uint8_t tTapCount = 0;
+static unsigned long tTapLast = 0;
+#define TAP_WINDOW_MS   450UL      // taps inside this window count as one burst
+#define DRY_AFTER_MS    900000UL   // 15 min pinned at zero substance -> hibernate
+#define AUTOSLEEP_MS    1800000UL  // 30 min idle with both meters low -> sleep
+#define HIB_REVIVE_MIN  30         // backstop: wake up on its own after 30 min
+#define OFFER_NEED      3          // offerings needed to revive
+#define GHOST_CELL      4
+#define GHOST_FLOOR_Y   170        // bottom edge of the ghost's cell grid
+
+static const uint8_t POOP_X[3] = { 36, 104, 172 };
+
+// Blit one sprite frame bottom-centre anchored on the cell grid. Unset cells
+// are left untouched, so the art reads as a hollow outline. While substance
+// is low the ghost is dithered (odd-parity cells skipped) to look faded.
+static void ghostBlit(const GhostAnim& a, uint8_t frame, int cx, int bottomY) {
+  const int bpr = (a.w + 7) / 8;
+  if (frame >= a.n) frame = (uint8_t)(a.n - 1);
+  const uint8_t* f = a.bits + (uint32_t)frame * (uint32_t)bpr * a.h;
+  int x0 = cx - (a.w * GHOST_CELL) / 2;
+  x0 &= ~(GHOST_CELL - 1);              // stay on the 4px cell grid
+  const int y0 = bottomY - a.h * GHOST_CELL;
+  const bool fade = (tSub <= 20);
+  for (int r = 0; r < a.h; r++) {
+    for (int c = 0; c < a.w; c++) {
+      const uint8_t byte = pgm_read_byte(f + r * bpr + (c >> 3));
+      if (!(byte & (0x80 >> (c & 7)))) continue;
+      if (fade && ((c + r) & 1)) continue;
+      lifeSpr.fillRect(x0 + c * GHOST_CELL, y0 + r * GHOST_CELL,
+                       GHOST_CELL, GHOST_CELL, 1);
+    }
+  }
+}
+
+static inline uint8_t ghostFrameAt(const GhostAnim& a, unsigned long start, unsigned long now) {
+  const uint32_t i = (uint32_t)((now - start) / a.frameMs);
+  return (uint8_t)(i % a.n);
+}
+
+static void tamaSave() {
+  tamaPrefs.putUChar("hunger", tSub);        // key kept: substance replaced hunger
+  tamaPrefs.putUChar("happy", tHappy);
+  tamaPrefs.putUChar("poops", tPoops);
+  tamaPrefs.putUShort("age", tAgeMin);
+  tamaPrefs.putBool("dry", tHiber);          // key kept: hibernation replaced dried-out
+  tamaPrefs.putUChar("offers", tOffer);
+  tamaPrefs.putUShort("hibmin", tHibMin);
 }
 
 static void tamaLoad() {
   tamaPrefs.begin("tama", false);
-  tHunger = tamaPrefs.getUChar("hunger", 80);
+  tSub    = tamaPrefs.getUChar("hunger", 80);
   tHappy  = tamaPrefs.getUChar("happy", 70);
   tPoops  = tamaPrefs.getUChar("poops", 0);
   tAgeMin = tamaPrefs.getUShort("age", 0);
-  tDry    = tamaPrefs.getBool("dry", false);
+  tHiber  = tamaPrefs.getBool("dry", false);
+  tOffer  = tamaPrefs.getUChar("offers", 0);
+  tHibMin = tamaPrefs.getUShort("hibmin", 0);
+  if (tOffer > OFFER_NEED) tOffer = OFFER_NEED;
 }
 
-static void tamaSave() {
-  tamaPrefs.putUChar("hunger", tHunger);
-  tamaPrefs.putUChar("happy", tHappy);
-  tamaPrefs.putUChar("poops", tPoops);
-  tamaPrefs.putUShort("age", tAgeMin);
-  tamaPrefs.putBool("dry", tDry);
+static void tamaRevive() {
+  tHiber = false;
+  tOffer = 0;
+  tHibMin = 0;
+  tHibAt = 0;
+  tSub = 30;
+  tHappy = 20;
+  tSleep = false;
+  tSubZeroAt = 0;
+  tSubAcc = tHappyAcc = 0;
+  tEatStart = millis();
+  tEatUntil = millis() + 1200UL;
+  tamaSave();
+}
+
+static void tamaHibernate(unsigned long now) {
+  tHiber = true;
+  tOffer = 0;
+  tHibMin = 0;
+  tHibAt = now;
+  tSleep = false;
+  tPoopAt = now + 180000UL + random(120000UL);
+  tamaSave();
 }
 
 void radarInit() {                     // mode entry
@@ -714,56 +768,59 @@ void radarInit() {                     // mode entry
   const unsigned long now = millis();
   tLastTick = now;
   tLastSave = now;
-  tEatUntil = tPlayUntil = 0;
-  tBlinkAt = now + 1500 + random(2500);
-  tBlinkUntil = 0;
-  tPoopAt = now + 180000UL + random(120000UL);
-  tHungerAcc = tHappyAcc = tMinuteAcc = 0;
-  tOffX = 0;
-  tDir = tDry ? 0 : 1;
-  tWanderAt = now + 4000;
-  tFoodOn = false;
-  tFoodY = 0;
-  tTapPending = false;
+  tEatUntil = tBoopUntil = 0;
+  // Poop, hibernation and idle timers belong to the background tick, not to
+  // mode entry: cycling through the pet must not restart them.
+  tTapCount = 0;
+  if (!tHibAt) tHibAt = now;
+  tLastInteract = now;
+  tOfferFxUntil = tCleanFxUntil = 0;
 }
 
-static void tamaHeart(int x, int y) {
-  lifeSpr.fillRect(x,     y,     2, 2, 2);
-  lifeSpr.fillRect(x + 3, y,     2, 2, 2);
-  lifeSpr.fillRect(x + 1, y + 2, 3, 2, 2);
-}
-
-// Drop a pellet. A dry crust gets it within arm's reach; a wet goo gets it on
-// one side of the face, so it has to walk over.
-static void tamaDropFood() {
-  tFoodSide = (int8_t)(!tFoodSide);
-  tFoodOn = true;
-  tFoodY = 40;
-  if (tDry) tFoodX = (int16_t)(120 + tOffX + (random(2) ? 16 : -16));
-  else      tFoodX = (int16_t)(tFoodSide ? 164 : 76);
-  tFoodLandedAt = 0;
-}
-
-// One press: clean poop if there is any, else feed. It waits out the
-// double-tap window first, so a double press is not read as two feeds.
-static void tamaTap() {
-  const unsigned long now = millis();
-  if (tTapPending && now - tTapAt <= TAP_WINDOW_MS) {
-    tTapPending = false;
-    tPlayStart = now;
-    if (!tDry) {
-      tPlayKind = (int)(random(3));    // 0 squish, 1 lift+drop+bounce, 2 hop
-      tPlayUntil = now + 1600UL;
-      tHappy = (tHappy > 84) ? 100 : (uint8_t)(tHappy + 16);
-    } else {
-      tPlayKind = 0;
-      tPlayUntil = now + 700UL;        // a tremble: it cannot play, but it twitches
+static void tamaResolveTap(uint8_t n, unsigned long now) {
+  tLastInteract = now;
+  if (tHiber) {
+    if (n == 2) {                       // a noodle offering
+      if (tOffer < OFFER_NEED) tOffer++;
+      tOfferFxUntil = now + 700UL;
+      if (tOffer >= OFFER_NEED) tamaRevive();
+      else tamaSave();
+    }
+    return;                             // single/triple taps do not wake it
+  }
+  if (n == 1) {
+    if (tPoops > 0) {                   // clean the nearest puddle
+      tPoops--;
+      tHappy = (tHappy > 96) ? 100 : (uint8_t)(tHappy + 4);
+      tCleanFxUntil = now + 600UL;
+    } else {                            // nothing to clean: a boop
+      tBoopStart = now;
+      tBoopUntil = now + 660UL;
     }
     tamaSave();
-    return;
+  } else if (n == 2) {                  // feed
+    tEatStart = now;
+    tEatUntil = now + 1560UL;
+    tSub   = (tSub   > 70) ? 100 : (uint8_t)(tSub + 30);
+    tHappy = (tHappy > 95) ? 100 : (uint8_t)(tHappy + 5);
+    tSleep = false;                     // feeding wakes it
+    tamaSave();
+  } else {                              // triple: toggle sleep
+    tSleep = !tSleep;
+    if (!tSleep) tSubZeroAt = 0;
+    tamaSave();
   }
-  tTapPending = true;
-  tTapAt = now;
+}
+
+// Taps are counted in a burst and resolved once the window closes.
+static void tamaTap() {
+  const unsigned long now = millis();
+  if (tTapCount && now - tTapLast <= TAP_WINDOW_MS) {
+    if (tTapCount < 3) tTapCount++;
+  } else {
+    tTapCount = 1;
+  }
+  tTapLast = now;
 }
 
 void updateTama() {
@@ -771,283 +828,113 @@ void updateTama() {
   if (now - tLastTick < TAMA_TICK_MS) return;
   const unsigned long dt = now - tLastTick;
   tLastTick = now;
+  if (!tLastInteract) tLastInteract = now;
+  if (!tPoopAt) tPoopAt = now + 180000UL + random(120000UL);
 
-  // ---- a pending single tap fires once the double-tap window closes ----
-  if (tTapPending && now - tTapAt > TAP_WINDOW_MS) {
-    tTapPending = false;
-    if (tPoops > 0) {
-      tPoops--;
-      tHappy = (tHappy > 96) ? 100 : (uint8_t)(tHappy + 4);
-    } else {
-      tamaDropFood();
+  // ---- tap burst resolution (after the multi-tap window) ----
+  if (tTapCount && now - tTapLast > TAP_WINDOW_MS) {
+    const uint8_t n = tTapCount;
+    tTapCount = 0;
+    tamaResolveTap(n, now);
+  }
+
+  if (tBoopUntil && now >= tBoopUntil) tBoopUntil = 0;
+  if (tEatUntil  && now >= tEatUntil)  tEatUntil  = 0;
+
+  // ---- meters: slow decay while sleeping or hibernating ----
+  tMinuteAcc += (uint32_t)dt;
+  if (tMinuteAcc >= 60000UL) {
+    tMinuteAcc = 0;
+    if (tAgeMin < 65000) tAgeMin++;
+    if (tHiber && tHibMin < 60000) {
+      tHibMin++;
+      if (tHibMin >= HIB_REVIVE_MIN) tamaRevive();   // backstop
     }
+  }
+
+  if (!tHiber) {
+    const uint32_t budget = tSleep ? (uint32_t)(dt / 2) : (uint32_t)dt;
+    tSubAcc   += budget;
+    tHappyAcc += budget;
+    if (tSubAcc >= 20000UL) { tSubAcc = 0; if (tSub) tSub--; }
+    if (tHappyAcc >= (tPoops ? 20000UL : 45000UL)) {
+      tHappyAcc = 0;
+      if (tHappy) tHappy--;
+    }
+  }
+
+  // ---- hibernation: zero substance for 15 min while awake ----
+  if (!tHiber && !tSleep) {
+    if (tSub == 0) {
+      if (!tSubZeroAt) tSubZeroAt = now;
+      else if (now - tSubZeroAt >= DRY_AFTER_MS) tamaHibernate(now);
+    } else {
+      tSubZeroAt = 0;
+    }
+  } else if (tSleep) {
+    tSubZeroAt = 0;
+  }
+
+  // ---- auto-sleep: 30 min ignored with both meters low ----
+  if (!tHiber && !tSleep && tSub <= 20 && tHappy <= 20 &&
+      now - tLastInteract >= AUTOSLEEP_MS) {
+    tSleep = true;
     tamaSave();
   }
 
-  // ---- timed actions end ----
-  if (tEatUntil  && now >= tEatUntil)  tEatUntil  = 0;
-  if (tPlayUntil && now >= tPlayUntil) tPlayUntil = 0;
-
-  // ---- meters ----
-  tHungerAcc += (uint32_t)dt;
-  tHappyAcc  += (uint32_t)dt;
-  tMinuteAcc += (uint32_t)dt;
-  if (tMinuteAcc >= 60000UL) { tMinuteAcc = 0; if (tAgeMin < 65000) tAgeMin++; }
-  if (tHungerAcc >= 20000UL) { tHungerAcc = 0; if (tHunger) tHunger--; }
-  if (tHappyAcc >= (tPoops ? 20000UL : 45000UL)) {
-    tHappyAcc = 0;
-    if (tHappy) tHappy--;
-  }
-
-  // ---- drying out: a state, not a third meter ----
-  if (tHunger == 0) {
-    if (!tDrySince) tDrySince = now;
-    if (!tDry && now - tDrySince >= DRY_AFTER_MS) {
-      tDry = true;
-      tDir = 0;
-      tamaSave();
-    }
-  } else {
-    tDrySince = 0;
-    if (tDry && tHunger >= DRY_WAKE_HUNGER) {
-      tDry = false;
-      tDir = 1;
-      tamaSave();
-    }
-  }
-
-  // ---- food: falls, then either walked to or reached for ----
-  if (tFoodOn) {
-    if (tFoodY < FOOD_FLOOR_Y) {
-      tFoodY = (int16_t)(tFoodY + 6);
-      if (tFoodY >= FOOD_FLOOR_Y) { tFoodY = FOOD_FLOOR_Y; tFoodLandedAt = now; }
-    } else if (tDry) {
-      if (tFoodLandedAt && now - tFoodLandedAt > 1200UL) {   // pseudopod
-        tHunger = (tHunger > 70) ? 100 : (uint8_t)(tHunger + 25);
-        tHappy  = (tHappy  > 95) ? 100 : (uint8_t)(tHappy + 4);
-        tFoodOn = false;
-        tEatUntil = now + 900UL;
-        tamaSave();
-      }
-    } else {
-      const int gooX = 120 + tOffX;
-      if (gooX < (int)tFoodX - 10)      { tOffX = (int16_t)(tOffX + 2); tDir = 1; }
-      else if (gooX > (int)tFoodX + 10) { tOffX = (int16_t)(tOffX - 2); tDir = -1; }
-      else {
-        tHunger = (tHunger > 70) ? 100 : (uint8_t)(tHunger + 30);
-        tHappy  = (tHappy  > 95) ? 100 : (uint8_t)(tHappy + 5);
-        tFoodOn = false;
-        tEatUntil = now + 1200UL;
-        tamaSave();
-      }
-      if (tOffX > 44) tOffX = 44;
-      if (tOffX < -44) tOffX = -44;
-    }
-  }
-
-  // ---- wander: never while food is out, never while dry ----
-  if (!tFoodOn && !tDry && now >= tWanderAt) {
-    tWanderAt = now + 5000UL + random(6000UL);
-    if (random(100) < 45) tDir = (int8_t)(random(2) ? 1 : -1);
-    if (random(100) < 15) tDir = 0;                 // pause and look around
-  }
-  if (!tFoodOn && !tDry && tDir != 0) {
-    const int16_t nx = (int16_t)(tOffX + tDir);
-    bool blocked = false;
-    for (int i = 0; i < tPoops; i++) {              // steer around its own mess
-      const int px = 88 + i * 20 - 120;
-      if (nx > px - 14 && nx < px + 22) blocked = true;
-    }
-    if (blocked) tDir = (int8_t)-tDir;
-    else tOffX = nx;
-    if (tOffX > 44)  { tOffX = 44;  tDir = -1; }
-    if (tOffX < -44) { tOffX = -44; tDir = 1; }
-  }
-
-  // ---- poops: it leaves one; only the button cleans it ----
-  if (now >= tPoopAt && tPoops < 3) {
+  // ---- ectoplasm puddles: 3-5 min, awake only, cap 3 ----
+  if (!tSleep && !tHiber && now >= tPoopAt && tPoops < 3) {
     tPoops++;
-    tPoopAt = now + 180000UL + random(180000UL);
-  }
-
-  // ---- blink ----
-  if (!tBlinkUntil && now >= tBlinkAt) {
-    tBlinkUntil = now + 220;
-  } else if (tBlinkUntil && now >= tBlinkUntil) {
-    tBlinkUntil = 0;
-    tBlinkAt = now + 2000UL + random(4000UL);
+    tPoopAt = now + 180000UL + random(120000UL);
   }
 
   // ---- persistence every 5 min ----
   if (now - tLastSave >= 300000UL) { tLastSave = now; tamaSave(); }
 
-  // ---- draw: chunky pixel goo ----
+  if (activeMode != MODE_RADAR) return;   // ticks in the background, draws when shown
+
+  // ---- draw ----
   lifeSpr.fillSprite(0);
-  const bool eating  = (tEatUntil != 0);
-  const bool playing = (tPlayUntil != 0);
-  const bool shut    = (tBlinkUntil != 0);
+  const int cx = 120;
+  const unsigned long el = tBoopStart ? (now - tBoopStart) : 0;
 
-  tGooPhase += playing ? 0.55f : 0.22f;
-  if (tGooPhase > 6.28318f) tGooPhase -= 6.28318f;
-
-  const int cxPix = tOffX / GOO_CELL;
-  const int floorY = 164;                // where the body meets the floor
-  static const uint8_t GOO_HW[16] = {3, 4, 4, 5, 5, 6, 6, 7, 7, 7, 8, 8, 8, 8, 8, 7};
-
-  float sy = 1.0f;                       // vertical scale
-  int   lift = 0;                        // px, negative = off the floor
-  bool  ball = false;
-
-  if (playing && !tDry) {
-    const uint32_t el = (uint32_t)(now - tPlayStart);
-    if (tPlayKind == 0) {
-      // squish: press flat, hold, pop back with a small overshoot
-      if      (el < 260)  sy = 1.0f - 0.45f * ((float)el / 260.0f);
-      else if (el < 1150) sy = 0.55f;
-      else if (el < 1450) sy = 0.55f + 0.57f * ((float)(el - 1150) / 300.0f);
-      else                sy = 1.12f - 0.12f * ((float)(el - 1450) / 150.0f);
-    } else if (tPlayKind == 1) {
-      // lift, drop, two bounces: it leaves the floor as a ball
-      ball = true;
-      if      (el < 500)  lift = -(int)(60.0f * ((float)el / 500.0f) * ((float)el / 500.0f));
-      else if (el < 800)  lift = -(int)(60.0f * (1.0f - (float)(el - 500) / 300.0f));
-      else if (el < 1050) lift = -(int)(30.0f * sinf(3.14159f * (float)(el - 800) / 250.0f));
-      else if (el < 1250) lift = -(int)(12.0f * sinf(3.14159f * (float)(el - 1050) / 200.0f));
-      else                lift = 0;
-    } else {
-      // hop: the original quick bounce, with a squash on each landing
-      const bool air = ((el / 160) & 1) != 0;
-      lift = air ? -8 : 0;
-      sy = air ? 1.0f : 0.94f;
+  if (tHiber) {
+    uint8_t f = 2;
+    if (tHibAt && now - tHibAt < 700UL)       f = 0;
+    else if (tHibAt && now - tHibAt < 1400UL) f = 1;
+    const int lift = (tOfferFxUntil > now) ? 6 : 0;
+    ghostBlit(GHOST_HIBER, f, cx, 200 - lift);
+    if (tOfferFxUntil > now) {          // the noodle offering hovering above
+      lifeSpr.fillRect(cx - 12, 40, 26, 4, 2);
+      lifeSpr.fillRect(cx - 12, 36, 4, 4, 2);
     }
-  }
-
-  const int baseYBody = floorY + lift;
-  int rowsDrawn = (int)(16.0f * sy + 0.5f);
-  if (rowsDrawn < 6) rowsDrawn = 6;
-  const float sx = 1.0f / sqrtf(sy < 0.2f ? 0.2f : sy);
-
-  if (tDry) {
-    // A crust: only the bottom rows survive, no wobble, no puddle. It can
-    // still twitch when the button is pressed.
-    const int cxJ = cxPix + (playing ? (((now / 120) & 1) ? 1 : -1) : 0);
-    for (int r = 12; r < 16; r++) {
-      const int hw = GOO_HW[r] + 1;
-      lifeSpr.fillRect(120 + (cxJ - hw) * GOO_CELL, floorY - (16 - r) * GOO_CELL,
-                       (2 * hw + 1) * GOO_CELL, GOO_CELL, 1);
-    }
-    lifeSpr.fillRect(120 + (cxJ - 6) * GOO_CELL, floorY - 12, 2 * GOO_CELL, GOO_CELL, 0);
-    lifeSpr.fillRect(120 + (cxJ + 3) * GOO_CELL, floorY - 16, GOO_CELL, 2 * GOO_CELL, 0);
-    if (!shut) {
-      lifeSpr.fillRect(120 + (cxJ - 4) * GOO_CELL, floorY - 12, GOO_CELL, GOO_CELL, 0);
-      lifeSpr.fillRect(120 + (cxJ + 2) * GOO_CELL, floorY - 12, GOO_CELL, GOO_CELL, 0);
-    }
+  } else if (tSleep) {
+    ghostBlit(GHOST_SLEEP, (uint8_t)(2 + ((now / GHOST_SLEEP.frameMs) % 3)), cx, GHOST_FLOOR_Y);
+  } else if (tEatUntil) {
+    ghostBlit(GHOST_EAT, ghostFrameAt(GHOST_EAT, tEatStart, now), cx, GHOST_FLOOR_Y);
+  } else if (tBoopUntil) {
+    ghostBlit(GHOST_BOOP, (uint8_t)(el / GHOST_BOOP.frameMs), cx, GHOST_FLOOR_Y);
   } else {
-    // Body: droplet while grounded, ball while airborne.
-    for (int r = 0; r < rowsDrawn; r++) {
-      const int src = (rowsDrawn > 1) ? (r * 15) / (rowsDrawn - 1) : 15;
-      int hw;
-      if (ball) {
-        float dy = 2.0f * (float)r / (float)(rowsDrawn - 1) - 1.0f;
-        if (dy < -1.0f) dy = -1.0f;
-        if (dy >  1.0f) dy =  1.0f;
-        hw = (int)lroundf(9.0f * sqrtf(1.0f - dy * dy));
-      } else {
-        hw = (int)lroundf((float)GOO_HW[src] * sx);
-      }
-      if (hw < 1) hw = 1;
-      const int off = ball ? 0 : gooRowOff(src);
-      const int yy  = baseYBody - (rowsDrawn - r) * GOO_CELL;
-      lifeSpr.fillRect(120 + (cxPix + off - hw) * GOO_CELL, yy,
-                       (2 * hw + 1) * GOO_CELL, GOO_CELL, 1);
-    }
-
-    // Puddle stays on the floor even while the body is in the air.
-    const int puddleHw = 9 + (tPuddlePulse ? 1 : 0);
-    lifeSpr.fillRect(120 + (cxPix - puddleHw) * GOO_CELL, floorY,
-                     (2 * puddleHw + 1) * GOO_CELL, GOO_CELL, 1);
-    lifeSpr.fillRect(120 + (cxPix - puddleHw + 2) * GOO_CELL, floorY + GOO_CELL,
-                     (2 * puddleHw - 3) * GOO_CELL, GOO_CELL, 1);
-    if (tPuddlePulse) tPuddlePulse--;
-
-    // Falling bead only while it is a grounded blob.
-    if (!ball) {
-      if (tDripRow >= 0) {
-        tDripRow++;
-        if (tDripRow >= rowsDrawn) { tDripRow = -1; tPuddlePulse = 8; }
-        else {
-          const int srow = (tDripRow * 15) / (rowsDrawn > 1 ? rowsDrawn - 1 : 1);
-          const int dhw = (int)lroundf((float)GOO_HW[srow] * sx);
-          lifeSpr.fillRect(120 + (cxPix + tDripSide * dhw) * GOO_CELL,
-                           baseYBody - (rowsDrawn - tDripRow) * GOO_CELL,
-                           GOO_CELL, GOO_CELL, 1);
-        }
-      } else if (random(240) == 0) {
-        tDripRow = 9;
-        tDripSide = (int8_t)(random(2) ? 1 : -1);
-      }
-    }
-
-    // Face near the top of the mass.
-    const int eyeY = baseYBody - (int)((float)rowsDrawn * GOO_CELL * 0.78f);
-    const int eyeH = shut ? GOO_CELL : 2 * GOO_CELL;
-    const int eyeL = 120 + (cxPix - 4) * GOO_CELL;
-    const int eyeR = 120 + (cxPix + 2) * GOO_CELL;
-    lifeSpr.fillRect(eyeL, eyeY, 2 * GOO_CELL, eyeH, 0);
-    lifeSpr.fillRect(eyeR, eyeY, 2 * GOO_CELL, eyeH, 0);
-    if (!shut) {
-      lifeSpr.fillRect(eyeL, eyeY, GOO_CELL, GOO_CELL, 2);
-      lifeSpr.fillRect(eyeR, eyeY, GOO_CELL, GOO_CELL, 2);
-    }
-
-    const int my = eyeY + 3 * GOO_CELL;
-    const int mx = 120 + cxPix * GOO_CELL;
-    if (eating || tHunger < 25) {
-      lifeSpr.fillRect(mx - GOO_CELL, my, 2 * GOO_CELL, 2 * GOO_CELL, 0);
-    } else if (tHappy >= 70) {
-      lifeSpr.fillRect(mx - 2 * GOO_CELL, my - GOO_CELL, GOO_CELL, GOO_CELL, 0);
-      lifeSpr.fillRect(mx, my, GOO_CELL, GOO_CELL, 0);
-      lifeSpr.fillRect(mx + GOO_CELL, my - GOO_CELL, GOO_CELL, GOO_CELL, 0);
-    } else if (tHappy < 30) {
-      lifeSpr.fillRect(mx, my, GOO_CELL, GOO_CELL, 0);
-      lifeSpr.fillRect(mx - 2 * GOO_CELL, my + GOO_CELL, GOO_CELL, GOO_CELL, 0);
-      lifeSpr.fillRect(mx + GOO_CELL, my + GOO_CELL, GOO_CELL, GOO_CELL, 0);
-    } else {
-      lifeSpr.fillRect(mx - GOO_CELL, my, 2 * GOO_CELL, GOO_CELL, 0);
-    }
+    const int lift = (tCleanFxUntil > now) ? 8 : 0;   // little hop after cleaning
+    ghostBlit(GHOST_IDLE, ghostFrameAt(GHOST_IDLE, 0, now), cx, GHOST_FLOOR_Y - lift);
   }
 
-  // ---- food pellet, and the pseudopod when it cannot walk ----
-  if (tFoodOn) {
-    lifeSpr.fillRect(tFoodX, tFoodY, 2 * GOO_CELL, 2 * GOO_CELL, 5);
-    lifeSpr.fillRect(tFoodX, tFoodY, GOO_CELL, GOO_CELL, 2);
-    if (tDry && tFoodY >= FOOD_FLOOR_Y) {
-      const int armY = floorY - 8;
-      const int gooX = 120 + cxPix * GOO_CELL;
-      const int x0 = gooX + (tFoodX > gooX ? 10 : -10);
-      const int step = (tFoodX > x0) ? GOO_CELL : -GOO_CELL;
-      for (int x = x0; step > 0 ? x < tFoodX : x > tFoodX; x += step)
-        lifeSpr.fillRect(x, armY + (((x / 8) & 1) ? 2 : 0), GOO_CELL, 2, 1);
-    }
-  }
-
-  // Hearts when content.
-  if (tHappy >= 70 && !tDry && !shut && ((now / 900) & 1)) {
-    tamaHeart(150, baseYBody - rowsDrawn * GOO_CELL - 10);
-    tamaHeart(166, baseYBody - rowsDrawn * GOO_CELL - 28);
-  }
-
-  // Poops: squat pixel clumps on the floor.
+  // ---- puddles on the floor ----
   for (int i = 0; i < tPoops; i++) {
-    const int px = 88 + i * 20;
-    lifeSpr.fillRect(px, 184, 3 * GOO_CELL, 2 * GOO_CELL, 7);
-    lifeSpr.fillRect(px + GOO_CELL, 180, GOO_CELL, GOO_CELL, 7);
+    for (int r = 0; r < GHOST_POOP_H; r++) {
+      const uint8_t row = pgm_read_byte(&GHOST_POOP[r]);
+      for (int c = 0; c < GHOST_POOP_W; c++) {
+        if (!(row & (0x80 >> (c & 7)))) continue;
+        lifeSpr.fillRect(POOP_X[i] + c * GHOST_CELL, 176 + r * GHOST_CELL,
+                         GHOST_CELL, GHOST_CELL, 1);
+      }
+    }
   }
 
-  // HUD: hunger pips on the left, happiness pips on the right.
+  // HUD: substance pips on the left, happiness pips on the right.
   for (int i = 0; i < 5; i++) {
-    lifeSpr.fillRect(74 + i * 6, 26, 4, 4, (tHunger > i * 20) ? 1 : 7);
-    lifeSpr.fillRect(130 + i * 6, 26, 4, 4, (tHappy  > i * 20) ? 5 : 7);
+    lifeSpr.fillRect(74 + i * 6, 26, 4, 4, (tSub   > i * 20) ? 1 : 7);
+    lifeSpr.fillRect(130 + i * 6, 26, 4, 4, (tHappy > i * 20) ? 5 : 7);
   }
 
   lifeSpr.pushSprite(0, 0);
@@ -1248,6 +1135,7 @@ void setup() {
 // ==========================================
 void loop() {
   bnTick();                                  // the tree grows whether or not it is shown
+  updateTama();                              // the ghost lives whether or not it is shown
   handleButtons();
   if (cycleStart) {                          // Random Cycle: start now
     cycleStart = false;
