@@ -92,15 +92,53 @@ static bool modeValid(uint8_t v) {
   }
 }
 
-// Random Cycle: rotate the pod through the visual roster on a timer.
+// Random Cycle: rotate the pod through a user-chosen roster on a timer.
+// Two rosters, because a linked pod and a bare pod are doing different jobs:
+// with the phone attached you may want Now Playing in the mix, while an
+// unlinked pod has no track to show. Each roster is a bitmask of DisplayMode
+// values, so any subset persists in one NVS int.
 #define CYCLE_MS 600000UL   // 10 minutes per animation
-// Random Cycle is background ambience, so it skips the things you pick on
-// purpose: quickdraw, slabbed, deep dig, and both bonsai builds.
-static const DisplayMode CYCLE_MODES[] = {
-  MODE_STATIC, MODE_BOIDS, MODE_FIRE, MODE_KNIGHT,
-  MODE_RADAR, MODE_STARFIELD
-};
-#define CYCLE_N ((int)(sizeof(CYCLE_MODES) / sizeof(CYCLE_MODES[0])))
+#define CYCLE_MAX 8
+
+static const uint16_t CYCLE_DEFAULT_MASK =
+    (1u << MODE_STATIC) | (1u << MODE_BOIDS) | (1u << MODE_FIRE) |
+    (1u << MODE_KNIGHT) | (1u << MODE_RADAR) | (1u << MODE_STARFIELD);
+
+static uint16_t cycleMaskLinked   = CYCLE_DEFAULT_MASK;
+static uint16_t cycleMaskUnlinked = CYCLE_DEFAULT_MASK;
+static DisplayMode cycleRoster[CYCLE_MAX];
+static int cycleN = 0;
+static volatile bool cycleCfgDirty = false;
+
+// Display id -> mode, shared by the mode picker and the cycle rosters.
+static int animNameToMode(const char* anim) {
+  if (!anim) return -1;
+  if (strcmp(anim, "static") == 0) return MODE_STATIC;
+  if (strcmp(anim, "now_playing") == 0) return MODE_NOW_PLAYING;
+  if (strcmp(anim, "boids") == 0) return MODE_BOIDS;
+  if (strcmp(anim, "fire") == 0) return MODE_FIRE;
+  if (strcmp(anim, "knight") == 0 || strcmp(anim, "run") == 0 || strcmp(anim, "jump") == 0) return MODE_KNIGHT;
+  if (strcmp(anim, "radar") == 0 || strcmp(anim, "pet") == 0) return MODE_RADAR;
+  if (strcmp(anim, "starfield") == 0 || strcmp(anim, "dla") == 0 || strcmp(anim, "crystal") == 0) return MODE_STARFIELD;
+  if (strcmp(anim, "eq") == 0 || strcmp(anim, "eye") == 0 || strcmp(anim, "eyeball") == 0) return MODE_EQ;
+  return -1;
+}
+
+// Rebuild the working roster for the current link state.
+static void cycleBuildRoster() {
+  uint16_t mask = deviceConnected ? cycleMaskLinked : cycleMaskUnlinked;
+  if (!mask) mask = CYCLE_DEFAULT_MASK;
+  cycleN = 0;
+  for (int m = 1; m < 16 && cycleN < CYCLE_MAX; m++) {
+    if (!(mask & (1u << m))) continue;
+    if (!modeValid((uint8_t)m)) continue;
+    cycleRoster[cycleN++] = (DisplayMode)m;
+  }
+  if (cycleN == 0) {                 // mask named only invalid bits
+    cycleN = 1;
+    cycleRoster[0] = MODE_STATIC;
+  }
+}
 DisplayMode displayMode = MODE_STATIC;   // the user's chosen animation (persisted)
 DisplayMode activeMode  = MODE_INDICATOR; // what is actually on screen right now
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
@@ -176,7 +214,7 @@ static DisplayMode pickRandomAnim();
 
 volatile bool cycleStart = false;      // BLE asked for Random Cycle
 static bool cycleEnabled = false;      // loop-owned
-static int cycleIndex = 0;             // current slot in CYCLE_MODES
+static int cycleIndex = 0;             // current slot in cycleRoster
 static unsigned long cycleNextAt = 0;  // millis() of next hop
 static unsigned long cycleLastHop = 0; // millis() of the last real hop (stall watchdog)
 volatile bool configDirty = false;
@@ -1080,6 +1118,33 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "cycle") == 0 || strcmp(anim, "random") == 0) { cycleStart = true; }
       else Serial.printf("[BLE] Unknown animation '%s'\n", anim);
     }
+    else if (strcmp(type, "cycle") == 0) {
+      // App -> pod: {"type":"cycle","connected":["static","fire"],
+      //              "unlinked":["boids","knight"]}
+      // Omitted keys keep their current roster. An empty list is refused: a
+      // cycle with nothing in it is a bug, not a preference.
+      JsonArray arrL = doc["connected"].as<JsonArray>();
+      if (!arrL.isNull()) {
+        uint16_t mask = 0;
+        for (JsonVariant v : arrL) {
+          int m = animNameToMode(v.as<const char*>());
+          if (m > 0) mask |= (uint16_t)(1u << m);
+        }
+        if (mask) cycleMaskLinked = mask;
+      }
+      JsonArray arrU = doc["unlinked"].as<JsonArray>();
+      if (!arrU.isNull()) {
+        uint16_t mask = 0;
+        for (JsonVariant v : arrU) {
+          int m = animNameToMode(v.as<const char*>());
+          if (m > 0) mask |= (uint16_t)(1u << m);
+        }
+        if (mask) cycleMaskUnlinked = mask;
+      }
+      cycleCfgDirty = true;   // loop persists, rebuilds and re-picks
+      Serial.printf("[CYCLE] rosters linked=0x%03X unlinked=0x%03X\n",
+                    cycleMaskLinked, cycleMaskUnlinked);
+    }
     else if (strcmp(type, "config") == 0) {
       brightnessOffset = doc["brightness_offset"] | 0;
       if (brightnessOffset < -50) brightnessOffset = -50;
@@ -1164,11 +1229,14 @@ void setup() {
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_STATIC);
     if (!modeValid((uint8_t)savedMode)) savedMode = MODE_STATIC;
     displayMode = savedMode;
+    cycleMaskLinked   = prefs.getUShort("cycL", CYCLE_DEFAULT_MASK);
+    cycleMaskUnlinked = prefs.getUShort("cycU", CYCLE_DEFAULT_MASK);
+    cycleBuildRoster();
     if (prefs.getBool("cycle", false)) {      // restore Random Cycle across reboots
       cycleEnabled = true;
       cycleIndex = 0;
-      for (int i = 0; i < CYCLE_N; i++)
-        if (CYCLE_MODES[i] == savedMode) { cycleIndex = i; break; }
+      for (int i = 0; i < cycleN; i++)
+        if (cycleRoster[i] == savedMode) { cycleIndex = i; break; }
       cycleNextAt = millis() + CYCLE_MS;
       cycleLastHop = millis();
       Serial.println("[NVS] restored Random Cycle");
@@ -1202,18 +1270,30 @@ void loop() {
   if (cycleStart) {                          // Random Cycle: start now
     cycleStart = false;
     cycleEnabled = true;
-    cycleIndex = (int)random(CYCLE_N);
-    setDisplayMode(CYCLE_MODES[cycleIndex]);
+    cycleIndex = (int)random(cycleN);
+    setDisplayMode(cycleRoster[cycleIndex]);
     cycleNextAt = millis() + CYCLE_MS;
     cycleLastHop = millis();
   }
   if (modeDirty) { modeDirty = false; cycleEnabled = false; setDisplayMode(pendingMode, true); }
+  if (cycleCfgDirty) {                       // new rosters from the app
+    cycleCfgDirty = false;
+    prefs.putUShort("cycL", cycleMaskLinked);
+    prefs.putUShort("cycU", cycleMaskUnlinked);
+    cycleBuildRoster();
+    if (cycleEnabled) {                      // honour the new list right away
+      cycleIndex = (int)random(cycleN);
+      setDisplayMode(cycleRoster[cycleIndex]);
+      cycleNextAt = millis() + CYCLE_MS;
+      cycleLastHop = millis();
+    }
+  }
   marqueeTick();
   if (cycleEnabled && mpPhase == MP_ANIM && (long)(millis() - cycleNextAt) >= 0) {   // hop to a fresh animation
     int k = cycleIndex;
-    while (CYCLE_N > 1 && k == cycleIndex) k = (int)random(CYCLE_N);
+    while (cycleN > 1 && k == cycleIndex) k = (int)random(cycleN);
     cycleIndex = k;
-    setDisplayMode(CYCLE_MODES[cycleIndex]);
+    setDisplayMode(cycleRoster[cycleIndex]);
     cycleNextAt = millis() + CYCLE_MS;
     cycleLastHop = millis();
   }
@@ -1225,9 +1305,9 @@ void loop() {
     mpPhase = MP_ANIM;
     mpSince = millis();
     int k = cycleIndex;
-    while (CYCLE_N > 1 && k == cycleIndex) k = (int)random(CYCLE_N);
+    while (cycleN > 1 && k == cycleIndex) k = (int)random(cycleN);
     cycleIndex = k;
-    setDisplayMode(CYCLE_MODES[cycleIndex]);
+    setDisplayMode(cycleRoster[cycleIndex]);
     cycleNextAt = millis() + CYCLE_MS;
     cycleLastHop = millis();
   }
@@ -1525,10 +1605,10 @@ void setDisplayMode(DisplayMode mode, bool remember) {
 
 // ---- marquee indicator logic ----
 static DisplayMode pickRandomAnim() {
-  DisplayMode pick = CYCLE_MODES[random(CYCLE_N)];
+  DisplayMode pick = cycleRoster[random(cycleN)];
   // "Now Playing" is meaningless with no phone attached: substitute something.
   for (int i = 0; i < 24 && !deviceConnected && pick == MODE_NOW_PLAYING; i++)
-    pick = CYCLE_MODES[random(CYCLE_N)];
+    pick = cycleRoster[random(cycleN)];
   if (!deviceConnected && pick == MODE_NOW_PLAYING) pick = MODE_STATIC;
   return pick;
 }
@@ -1565,6 +1645,7 @@ void marqueeTick() {
     mpWasLinked = true;
     mpPhase = MP_ANIM;
     mpSince = now;
+    cycleBuildRoster();                     // linked roster now in force
     Serial.println("[MARQ] linked -> chosen animation");
     applyChosenMode();
     return;
@@ -1575,6 +1656,7 @@ void marqueeTick() {
     mpSince = now;
     mpBootHold = BOOT_SEARCH_MS;
     mpBootSearching = true;
+    cycleBuildRoster();                     // unlinked roster now in force
     Serial.println("[MARQ] unlinked -> searching card, then marquee (5 min window)");
     setDisplayMode(MODE_BOOT);
     return;

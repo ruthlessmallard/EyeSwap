@@ -258,6 +258,37 @@ class BleHandler {
     }
   }
 
+  /// The firmware's built-in Random Cycle roster. Used when the user has never
+  /// chosen one, and as the reference list in Settings.
+  static const List<String> defaultCycleRoster = [
+    'static', 'boids', 'fire', 'knight', 'pet', 'crystal',
+  ];
+
+  /// Push the Random Cycle rosters: what rotates while a phone is linked, and
+  /// what rotates on an unlinked pod. Both lists must be non-empty; the pod
+  /// refuses an empty roster and keeps its previous one.
+  Future<bool> sendCycleConfig({
+    required List<String> connected,
+    required List<String> unlinked,
+  }) async {
+    final characteristic = _configCharacteristic;
+    if (characteristic == null) return false;
+
+    if (connected.isEmpty || unlinked.isEmpty) return false;
+    try {
+      final packet = jsonEncode({
+        'type': 'cycle',
+        'connected': connected,
+        'unlinked': unlinked,
+      });
+      await characteristic.write(utf8.encode(packet), withoutResponse: true);
+      return true;
+    } catch (e) {
+      developer.log('Cycle write failed: $e', name: 'BleHandler');
+      return false;
+    }
+  }
+
   /// Push display config (brightness offset + color) to the ESP32.
   Future<bool> sendDisplayConfig({
     required int brightnessOffset,

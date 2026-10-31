@@ -75,6 +75,19 @@ class _ControllerScreenState extends State<ControllerScreen> {
     );
     // resync: stored settings, not a pick -- must not kill Random Cycle.
     await _bleHandler.sendMode(animation, resync: true);
+
+    // Random Cycle rosters travel with the rest of the settings, so a pod that
+    // was reflashed or wiped comes back with the user's lists, not defaults.
+    final cycleConn = prefs.getStringList('cycle_connected');
+    final cycleUnl = prefs.getStringList('cycle_unlinked');
+    await _bleHandler.sendCycleConfig(
+      connected: (cycleConn == null || cycleConn.isEmpty)
+          ? BleHandler.defaultCycleRoster
+          : cycleConn,
+      unlinked: (cycleUnl == null || cycleUnl.isEmpty)
+          ? BleHandler.defaultCycleRoster
+          : cycleUnl,
+    );
   }
 
   Future<bool> _refreshPermissionState() async {

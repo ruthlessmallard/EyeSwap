@@ -39,6 +39,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   // Idle animation mode
   String _idleAnimation = 'static'; // firmware ids; marquee is a link indicator, not a mode
+
+  // Random Cycle rosters. Two of them: a linked pod can rotate through
+  // Now Playing, a bare pod cannot, so the two sets are chosen separately.
+  List<String> _cycleConnected = List.of(BleHandler.defaultCycleRoster);
+  List<String> _cycleUnlinked = List.of(BleHandler.defaultCycleRoster);
   
   // Every id here is a string the firmware accepts today. Category is only for
   // layout -- the pod does not care.
@@ -80,6 +85,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final savedIdle = prefs.getString('idle_animation');
       final known = _idleAnimations.any((a) => a['id'] == savedIdle);
       _idleAnimation = known ? savedIdle! : 'static';
+      final savedConn = prefs.getStringList('cycle_connected');
+      final savedUnl = prefs.getStringList('cycle_unlinked');
+      _cycleConnected = (savedConn == null || savedConn.isEmpty)
+          ? List.of(BleHandler.defaultCycleRoster)
+          : List.of(savedConn);
+      _cycleUnlinked = (savedUnl == null || savedUnl.isEmpty)
+          ? List.of(BleHandler.defaultCycleRoster)
+          : List.of(savedUnl);
       _brightnessOffset = prefs.getDouble('brightness_offset') ?? 0;
       final hex = prefs.getString('bg_color') ?? 'FFAA00';
       _selectedColor = Color(int.parse('FF$hex', radix: 16));
@@ -103,6 +116,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       _setStatus('Saved. Connect to EyeSwap to apply.');
     }
+  }
+
+  /// Toggle one animation in one roster, persist both, and push to the pod.
+  Future<void> _toggleCycle(String id, {required bool connected}) async {
+    final target = connected ? _cycleConnected : _cycleUnlinked;
+    if (target.contains(id) && target.length <= 1) {
+      _setStatus('Keep at least one animation in the cycle.');
+      return;
+    }
+    setState(() {
+      if (target.contains(id)) {
+        target.remove(id);
+      } else {
+        target.add(id);
+      }
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('cycle_connected', _cycleConnected);
+    await prefs.setStringList('cycle_unlinked', _cycleUnlinked);
+    final sent = await widget.bleHandler.sendCycleConfig(
+      connected: _cycleConnected,
+      unlinked: _cycleUnlinked,
+    );
+    if (sent) {
+      _setStatus('Random Cycle updated');
+    } else {
+      _setStatus('Saved. Connect to EyeSwap to apply.');
+    }
+  }
+
+  Widget _cycleChips({required bool connected}) {
+    final selected = connected ? _cycleConnected : _cycleUnlinked;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: _idleAnimations
+          .where((a) => a['id'] != 'cycle')
+          .map((anim) {
+        final id = anim['id'] as String;
+        final isOn = selected.contains(id);
+        return FilterChip(
+          label: Text(anim['name'] as String),
+          selected: isOn,
+          onSelected: (_) => _toggleCycle(id, connected: connected),
+          backgroundColor: const Color(0xFF0A0A0A),
+          selectedColor: const Color(0xFFFFAA00),
+          checkmarkColor: Colors.black,
+          labelStyle: TextStyle(
+            color: isOn ? Colors.black : Colors.white,
+            fontSize: 12,
+          ),
+        );
+      }).toList(),
+    );
   }
 
   /// '#RRGGBB' uppercase, matching the firmware's parser.
@@ -612,6 +679,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }).toList(),
                       ),
                     ],
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 24),
+
+            // Random Cycle rosters
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'RANDOM CYCLE',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 10,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'What rotates, chosen per link state. Tap to include or drop an animation.',
+                    style: TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'WHEN CONNECTED',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 10,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _cycleChips(connected: true),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'WHEN DISCONNECTED',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 10,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _cycleChips(connected: false),
                 ],
               ),
             ),

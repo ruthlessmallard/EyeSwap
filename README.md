@@ -97,9 +97,11 @@ connect.
 | **Quickdraw** | Pixel eyeball duel — draw on the tell |
 | **Random Cycle** | Auto-rotates through the ambient roster every **10 minutes** |
 
-Random Cycle runs Game of Life, Boids, Fire, Knight Run, Pet, and Crystal.
-Quickdraw and Now Playing are pick-only: they are things you choose, not
-background ambience.
+Random Cycle has **two rosters** you choose from Settings: one for when the
+phone is connected and one for when it is unlinked. A linked pod can rotate
+through Now Playing; a bare pod cannot, so the two lists are set separately.
+Both rosters persist in NVS and are re-pushed by the app on connect. An empty
+roster is refused — a cycle with nothing in it is a bug, not a preference.
 
 **Two-tone color:** every animation uses a **primary** and an **accent** color.
 The accent highlights the element that should pop — the white-hot core of the
@@ -234,6 +236,10 @@ BLE UUIDs (must match the Flutter app exactly):
 //   ignores a resync while it is Random Cycling, so a reconnect cannot stop it.
 {"type":"mode","animation":"fire"}
 {"type":"mode","animation":"cycle"}   // Random Cycle ("random" also accepted)
+
+// App → ESP32 Random Cycle rosters (persisted in NVS; omitted keys keep their
+// current list, an empty list is refused)
+{"type":"cycle","connected":["static","fire","now_playing"],"unlinked":["boids","knight"]}
 
 // App → ESP32 wall clock (on connect, then every 15 min); the pod has no RTC
 {"type":"time","time":"13:45"}
