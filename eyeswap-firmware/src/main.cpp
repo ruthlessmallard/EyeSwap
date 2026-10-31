@@ -31,6 +31,9 @@
 
 // ==== Timing ====
 #define LONG_PRESS_MS      600
+#define PRIVACY_HOLD_MS   1200   // buttons 1+3 together: blank the display
+#define BOOT_HOLD_MS      4000   // welcome screen at power-on
+#define BOOT_SEARCH_MS    2000   // shorter "searching" beat after a link drop
 
 // ==== Button State ====
 struct Button {
@@ -75,7 +78,8 @@ enum DisplayMode {
   MODE_RADAR     = 7,
   MODE_STARFIELD = 8,
   MODE_EQ        = 11,
-  MODE_INDICATOR = 12
+  MODE_INDICATOR = 12,
+  MODE_BOOT      = 13   // transient welcome/searching screen, never persisted
 };
 static bool modeValid(uint8_t v) {
   switch (v) {
@@ -158,9 +162,11 @@ volatile bool modeDirty = false;
 // chosen animation and re-runs one full scroll pass every MARQUEE_EVERY_MS.
 #define MARQUEE_STARTUP_MS 300000UL   // 5 min
 #define MARQUEE_EVERY_MS   600000UL   // one pass per 10 min unlinked
-enum MarqueePhase : uint8_t { MP_STARTUP, MP_ANIM, MP_PASS };
-static MarqueePhase mpPhase = MP_STARTUP;
+enum MarqueePhase : uint8_t { MP_BOOT, MP_STARTUP, MP_ANIM, MP_PASS };
+static MarqueePhase mpPhase = MP_BOOT;
 static unsigned long mpSince = 0;
+static unsigned long mpBootHold = BOOT_HOLD_MS;   // how long the current boot screen stays
+static bool mpBootSearching = false;               // power-on vs link-drop wording
 static bool mpWasLinked = false;
 static volatile bool mpPassDone = false;
 static volatile bool mpTestOnePass = false;   // BLE "marquee" = show one pass, do not persist
@@ -175,6 +181,29 @@ static unsigned long cycleNextAt = 0;  // millis() of next hop
 static unsigned long cycleLastHop = 0; // millis() of the last real hop (stall watchdog)
 volatile bool configDirty = false;
 volatile bool npDirty = false;
+volatile bool clockDirty = false;
+
+// ==== Clock (synced from the phone; there is no RTC on the pod) ====
+static int clockMin = -1;              // minutes past midnight, -1 = never synced
+static unsigned long clockBaseMs = 0;  // millis() when that time was set
+static int lastClockMinDrawn = -1;
+
+// ==== Privacy mode: buttons 1+3 held together blank the display ====
+static bool privacyOn = false;
+
+static bool parseHHMM(const char* s, int& outMin) {
+  int h = -1, m = -1;
+  if (!s || sscanf(s, "%d:%d", &h, &m) != 2) return false;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return false;
+  outMin = h * 60 + m;
+  return true;
+}
+
+// Minutes past midnight, or -1 when the phone has never sent the time.
+static int clockMinute() {
+  if (clockMin < 0) return -1;
+  return (int)((clockMin + (millis() - clockBaseMs) / 60000UL) % 1440UL);
+}
 
 // Display settings persist across power cycles (NVS).
 Preferences prefs;
@@ -1074,6 +1103,17 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       Serial.printf("[BLE] Config applied: brightness %d, primary #%02X%02X%02X accent #%02X%02X%02X\n",
                     brightnessOffset, baseR, baseG, baseB, accR, accG, accB);
     }
+    else if (strcmp(type, "time") == 0 || strcmp(type, "init") == 0) {
+      int mins;
+      if (parseHHMM(doc["time"] | "", mins)) {
+        clockMin = mins;
+        clockBaseMs = millis();
+        clockDirty = true;   // deferred: loop task repaints if a clock is on screen
+        Serial.printf("[BLE] Clock set to %02d:%02d\n", mins / 60, mins % 60);
+      } else {
+        Serial.println("[BLE] time packet had no valid HH:MM");
+      }
+    }
     else if (strcmp(type, "now_playing") == 0) {
       npTitle = (const char*)(doc["title"] | "");
       npArtist = (const char*)(doc["artist"] | "");
@@ -1142,10 +1182,12 @@ void setup() {
     accB  = prefs.getUChar("ab", 0xFF);
   }
   applyDisplayColor();
-  // Always boot on the indicator: 5 minutes of marquee, or until the app links.
-  mpPhase = MP_STARTUP;
+  // Power-on: welcome card, then 5 minutes of marquee, or until the app links.
+  mpPhase = MP_BOOT;
   mpSince = millis();
-  setDisplayMode(MODE_INDICATOR);
+  mpBootHold = BOOT_HOLD_MS;
+  mpBootSearching = false;
+  setDisplayMode(MODE_BOOT);
 
   setupBLE();
 
@@ -1200,7 +1242,11 @@ void loop() {
     npDirty = false;
     if (activeMode == MODE_NOW_PLAYING) drawNowPlaying();
   }
-  renderDisplay();
+  if (clockDirty) {
+    clockDirty = false;
+    if (activeMode == MODE_NOW_PLAYING) drawNowPlaying();   // show the synced time
+  }
+  if (!privacyOn) renderDisplay();
   delay(2);
 }
 
@@ -1319,8 +1365,27 @@ void applyDisplayColor() {
   Serial.printf("[TFT] draw color 0x%04X accent 0x%04X\n", drawColor, accentColor);
 }
 
+// Clock line above the playback state. Only drawn once the phone has synced
+// the time; with no RTC the pod has nothing honest to show before that.
+static void drawClockLine() {
+  const int m = clockMinute();
+  if (m < 0) return;
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%02d:%02d", m / 60, m % 60);
+  tft.setTextFont(1);
+  tft.setTextSize(2);
+  tft.setTextColor(drawColor);
+  tft.setTextDatum(MC_DATUM);
+  tft.fillRect(70, 18, 100, 26, TFT_BLACK);
+  tft.drawString(buf, tft.width() / 2, 30);
+  tft.setTextDatum(TL_DATUM);
+  lastClockMinDrawn = m;
+}
+
 void drawNowPlaying() {
   tft.fillScreen(TFT_BLACK);
+  lastClockMinDrawn = -1;
+  drawClockLine();
   tft.setTextColor(drawColor);
   tft.setTextFont(1);
   tft.setTextDatum(MC_DATUM);
@@ -1362,8 +1427,10 @@ void drawNowPlaying() {
 }
 
 void updateNowPlaying() {
-  if (!npTitleScroll && !npArtistScroll) return;
   unsigned long now = millis();
+  const int m = clockMinute();
+  if (m >= 0 && m != lastClockMinDrawn) drawClockLine();   // minute rollover
+  if (!npTitleScroll && !npArtistScroll) return;
   if (now - lastMarqueeUpdate < MARQUEE_MS) return;
   lastMarqueeUpdate = now;
 
@@ -1399,6 +1466,25 @@ void saveDisplaySettings() {
   prefs.putUChar("ab", accB);
 }
 
+// Welcome / searching card. Shown at power-on and for a short beat after the
+// phone drops, before the marquee indicator takes over.
+static void drawBootScreen(bool searching) {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextFont(1);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(drawColor);
+  tft.setTextSize(2);
+  tft.drawString("WELCOME TO", tft.width() / 2, 60);
+  tft.setTextSize(4);
+  tft.drawString("EYESWAP", tft.width() / 2, 98);
+  tft.setTextSize(2);
+  tft.drawString(searching ? "SEARCHING..." : "STARTING...", tft.width() / 2, 146);
+  tft.setTextSize(1);
+  tft.drawString("Not your mother.", tft.width() / 2, 184);
+  tft.drawString("Operate responsibly.", tft.width() / 2, 200);
+  tft.setTextDatum(TL_DATUM);
+}
+
 void setDisplayMode(DisplayMode mode, bool remember) {
   activeMode = mode;
   if (lifeSpriteReady && mode != MODE_EQ) setStandardPalette(); // shooter and dig own their palettes while active
@@ -1411,6 +1497,8 @@ void setDisplayMode(DisplayMode mode, bool remember) {
   tft.fillScreen(TFT_BLACK);
   if (mode == MODE_NOW_PLAYING) {
     drawNowPlaying();
+  } else if (mode == MODE_BOOT) {
+    drawBootScreen(mpBootSearching);
   } else if (mode == MODE_INDICATOR) {
     // drawNowPlaying() changes font/size/datum; restore ticker settings.
     tft.setTextFont(1);
@@ -1457,6 +1545,10 @@ static void applyChosenMode() {
 void marqueeTick() {
   const unsigned long now = millis();
 
+  // Privacy mode owns the screen: freeze the indicator phase machine instead
+  // of letting it light the display back up. The phase resumes on wake.
+  if (privacyOn) return;
+
   if (mpTestOnePass) {                       // BLE asked for a single pass
     mpTestOnePass = false;
     mpPhase = MP_PASS;
@@ -1476,15 +1568,26 @@ void marqueeTick() {
   }
   if (!deviceConnected && mpWasLinked) {     // app went away: start the clock again
     mpWasLinked = false;
-    mpPhase = MP_STARTUP;
+    mpPhase = MP_BOOT;
     mpSince = now;
-    Serial.println("[MARQ] unlinked -> marquee (5 min window)");
-    setDisplayMode(MODE_INDICATOR);
+    mpBootHold = BOOT_SEARCH_MS;
+    mpBootSearching = true;
+    Serial.println("[MARQ] unlinked -> searching card, then marquee (5 min window)");
+    setDisplayMode(MODE_BOOT);
     return;
   }
   if (deviceConnected) return;               // the app owns the display
 
   switch (mpPhase) {
+    case MP_BOOT:
+      if (now - mpSince >= mpBootHold) {
+        mpPhase = MP_STARTUP;
+        mpSince = now;
+        mpBootSearching = false;
+        Serial.println("[MARQ] boot card done -> marquee");
+        setDisplayMode(MODE_INDICATOR);
+      }
+      break;
     case MP_STARTUP:
       if (now - mpSince >= MARQUEE_STARTUP_MS) {
         mpPhase = MP_ANIM;
@@ -3031,11 +3134,29 @@ void renderDisplay() {
     case MODE_RADAR:       updateTama(); break;
     case MODE_STARFIELD:   updateDla(); break;
     case MODE_EQ:          shUpdate(); break;
+    case MODE_BOOT:        break;   // static card, nothing to animate
   }
 }
 
 void handleButtons() {
   unsigned long now = millis();
+
+  bool raw1 = (digitalRead(btns[0].pin) == LOW);
+  bool raw3 = (digitalRead(btns[2].pin) == LOW);
+
+  // Privacy combo: 1+3 held together. Both long-press fires are swallowed so
+  // the gesture cannot also skip a track or dial out on the way in.
+  if (!privacyOn && raw1 && raw3 && btns[0].pressed && btns[2].pressed) {
+    unsigned long both = btns[0].pressTime > btns[2].pressTime
+                             ? btns[0].pressTime : btns[2].pressTime;
+    if (now - both >= PRIVACY_HOLD_MS) {
+      privacyOn = true;
+      btns[0].longPressSent = true;
+      btns[2].longPressSent = true;
+      tft.fillScreen(TFT_BLACK);
+      Serial.println("[PRIV] display blanked (1+3)");
+    }
+  }
 
   for (int i=0; i<3; i++) {
     bool raw = (digitalRead(btns[i].pin) == LOW);
@@ -3045,6 +3166,16 @@ void handleButtons() {
       b.pressed = true;
       b.longPressSent = false;
       b.pressTime = now;
+      if (privacyOn) {
+        // Any press wakes the display; it must not also fire its media action.
+        privacyOn = false;
+        b.longPressSent = true;
+        Serial.println("[PRIV] display restored");
+        if (mpPhase == MP_BOOT) setDisplayMode(MODE_BOOT);
+        else if (mpPhase == MP_ANIM) applyChosenMode();
+        else setDisplayMode(MODE_INDICATOR);
+        continue;
+      }
     }
     else if (b.pressed && !raw) {
       if (!b.longPressSent) {

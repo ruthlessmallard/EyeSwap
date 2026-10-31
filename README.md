@@ -67,6 +67,9 @@ the on-screen 3-button UI for bench testing.
 The scrolling EYESWAP marquee is no longer selectable. It is the pod's link
 indicator:
 
+- Power-on shows a welcome card (`WELCOME TO EYESWAP` / `STARTING...`) for
+  **4 seconds**; a dropped link shows a `SEARCHING...` card for **2 seconds**.
+  Both hand over to the marquee indicator.
 - Boot, or any disconnect → marquee for **5 minutes**, or until the app connects.
 - Still unlinked after 5 minutes → the user's chosen animation plays.
 - Every **10 minutes** of unlinked animation → **one full scroll pass** of the
@@ -85,7 +88,7 @@ connect.
 | Mode | What it does |
 |------|--------------|
 | **Game of Life** | Conway's Game of Life, 120×120 torus, reseeds when it dies/freezes |
-| **Now Playing** | PLAYING/PAUSED + title + artist card |
+| **Now Playing** | PLAYING/PAUSED + title + artist card, with the synced clock when the phone has sent the time |
 | **Boids** | Flocking sim — "little fish" 🐟 |
 | **Fire** | Doom-style rising flame |
 | **Knight Run** | Self-playing runner — hops hay bales and brick walls, ducks under arrows |
@@ -113,6 +116,14 @@ short + long press):
 - **Button 1 (Media A)**: Focus & Autoplay YouTube Music
 - **Button 2 (Media B)**: Focus & Autoplay Audible
 - **Button 3 (Optional — calls)**: Deny Incoming Call + Send Custom SMS
+
+### Privacy Mode
+
+Hold **buttons 1 and 3 together for 1.2 s** and the display blanks to black.
+The long-press actions for both buttons are swallowed, so the gesture cannot
+also skip a track or dial out. Any press after that wakes the display and is
+consumed — the wake press does not fire its media action. Privacy is not
+persisted: a power cycle always comes back with the display on.
 
 ### Long Press Actions
 
@@ -187,10 +198,12 @@ pio run -t upload --upload-port /dev/ttyUSB0
 pio device monitor -p /dev/ttyUSB0 -b 115200
 ```
 
-**TODO / Stubs:**
-- **Dual long-press**: Buttons 1+3 held together kills display (privacy mode)
-- **Time sync**: App sends current time on connect for clock display
-- **Boot screen**: Show welcome ASCII art when powered on / disconnected
+**Privacy, clock, boot:**
+- Buttons 1+3 held 1.2 s blank the display; any press wakes it
+- App pushes `HH:MM` on connect and every 15 minutes; the Now Playing card
+  shows it. No RTC on the pod, so the clock is blank until the first sync
+- Welcome card at power-on (4 s) and a `SEARCHING...` card after a link drop
+  (2 s), both before the marquee indicator
 
 ---
 
@@ -217,6 +230,9 @@ BLE UUIDs (must match the Flutter app exactly):
 //   ignores a resync while it is Random Cycling, so a reconnect cannot stop it.
 {"type":"mode","animation":"fire"}
 {"type":"mode","animation":"cycle"}   // Random Cycle ("random" also accepted)
+
+// App → ESP32 wall clock (on connect, then every 15 min); the pod has no RTC
+{"type":"time","time":"13:45"}
 
 // App → ESP32 now-playing metadata (pushed only on change)
 {"type":"now_playing","title":"Song","artist":"Artist","state":"playing","source":"com.google.android.apps.youtube.music"}

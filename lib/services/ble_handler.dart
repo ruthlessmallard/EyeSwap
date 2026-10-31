@@ -25,6 +25,7 @@ class BleHandler {
   static const Duration _searchTickPeriod = Duration(seconds: 5);
   DateTime? _searchStartedAt;
   Timer? _searchTick;
+  Timer? _clockTick;
   bool _gaveUp = false;
   VoidCallback? onSearchExpired;
   
@@ -128,6 +129,8 @@ class BleHandler {
         _device = null;
         _commandCharacteristic = null;
         _configCharacteristic = null;
+        _clockTick?.cancel();
+        _clockTick = null;
         onDeviceDisconnected?.call();
         developer.log('EyeSwap disconnected - auto-rescanning', name: 'BleHandler');
         beginSearch();
@@ -168,6 +171,12 @@ class BleHandler {
       if (_commandCharacteristic != null) {
         _watchConnectionState(device);
         _searchSucceeded();
+        // The pod has no RTC: hand it the wall clock now, then keep it honest.
+        unawaited(sendClock());
+        _clockTick?.cancel();
+        _clockTick = Timer.periodic(const Duration(minutes: 15), (_) {
+          unawaited(sendClock());
+        });
         onDeviceConnected?.call();
         developer.log('Connected to EyeSwap ESP32', name: 'BleHandler');
       } else {
@@ -178,6 +187,25 @@ class BleHandler {
       _scheduleRescan();
     } finally {
       _connecting = false;
+    }
+  }
+
+  /// Push the phone's wall clock (HH:MM, 24h). The pod has no RTC, so this is
+  /// the only way the Now Playing card can show a time.
+  Future<bool> sendClock([DateTime? now]) async {
+    final characteristic = _configCharacteristic;
+    if (characteristic == null) return false;
+
+    final t = now ?? DateTime.now();
+    final hh = t.hour.toString().padLeft(2, '0');
+    final mm = t.minute.toString().padLeft(2, '0');
+    try {
+      final packet = jsonEncode({'type': 'time', 'time': '$hh:$mm'});
+      await characteristic.write(utf8.encode(packet), withoutResponse: true);
+      return true;
+    } catch (e) {
+      developer.log('Clock write failed: $e', name: 'BleHandler');
+      return false;
     }
   }
 
