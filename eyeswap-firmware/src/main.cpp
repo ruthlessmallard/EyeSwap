@@ -4,7 +4,6 @@
 // Copyright © 2026 Shawn Baird
 // ==========================================
 
-#include "dbonsai.h"
 #include "shooter.h"
 #include <Arduino.h>
 #include <BLEDevice.h>
@@ -75,14 +74,13 @@ enum DisplayMode {
   MODE_RADAR     = 7,
   MODE_STARFIELD = 8,
   MODE_EQ        = 11,
-  MODE_INDICATOR = 12,
-  MODE_DBONSAI   = 14
+  MODE_INDICATOR = 12
 };
 static bool modeValid(uint8_t v) {
   switch (v) {
     case MODE_STATIC: case MODE_NOW_PLAYING: case MODE_BOIDS:
     case MODE_BONSAI: case MODE_FIRE: case MODE_KNIGHT: case MODE_RADAR:
-    case MODE_STARFIELD: case MODE_EQ: case MODE_DBONSAI:
+    case MODE_STARFIELD: case MODE_EQ:
       return true;
     default:
       return false;
@@ -218,13 +216,6 @@ static unsigned long lastFishTap = 0;
 #define FRIGHT_MS      5000UL
 #define FISH_BOTTOM_Y  206
 
-// ==== Langton's ant: PARKED 2026-10-24 (Bonsai took the slot). Nothing deleted.
-#if 0
-#define ANT_BYTES ((LIFE_W * LIFE_H + 7) / 8)
-static uint8_t antGrid[ANT_BYTES];       // classic binary turn state
-static int antX, antY, antDir;   // dir: 0=N 1=E 2=S 3=W
-static unsigned long lastAntUpdate = 0;
-#endif
 
 // ==== Bonsai (MODE_BONSAI): DLA wood, foliage gates the growth ====
 // A trunk is planted; walkers accrete wood one pixel at a time (crystal
@@ -618,91 +609,6 @@ void updateBonsai() {
 }
 
 
-
-// ==== DLA bonsai (MODE_DBONSAI): authored skeleton, accreted foliage ====
-// The module in dbonsai.cpp grows a 60x60 tree: parametric trunk/branches, then
-// foliage clumps accreted one cell at a time. Time is compressed for the bench:
-// 24 simulated hours run in ~1.5 minutes, then the tree holds and replants.
-#define DNB_W        60
-#define DNB_H        60
-#define DNB_PX       4
-#define DNB_ACCEL    120UL            // simulated ms per real ms (~40 s to grown)
-#define DNB_HOLD_MS  6000UL           // hold the finished tree, then replant
-#define DNB_SIM_FULL (24UL * 3600000UL)
-
-static uint8_t dnbPrev[DNB_W * DNB_H];
-static unsigned long dnbLast = 0, dnbDoneAt = 0;
-static uint32_t dnbSimMs = 0;
-static unsigned long dnbLastChange = 0;
-static bool dnbReady = false;
-
-static void dnbBlit(int x, int y, uint8_t slot) {
-  lifeSpr.fillRect(x * DNB_PX, y * DNB_PX, DNB_PX, DNB_PX, slot);
-}
-
-static void dnbRepaintAll() {
-  lifeSpr.fillSprite(0);
-  for (int y = 0; y < DNB_H; y++)
-    for (int x = 0; x < DNB_W; x++) {
-      uint8_t s = dnbCell(x, y);
-      dnbPrev[y * DNB_W + x] = s;
-      if (s) dnbBlit(x, y, s);
-    }
-  lifeSpr.pushSprite(0, 0);
-}
-
-static void dnbStart() {
-  dnbInit((uint32_t)esp_random());
-  dnbSimMs = 0;
-  dnbDoneAt = 0;
-  dnbLast = millis();
-  dnbLastChange = dnbLast;
-  dnbReady = true;
-  dnbRepaintAll();
-  Serial.println("[DNB] new tree");
-}
-
-static void dnbInteract() {          // button: replant a fresh tree
-  dnbStart();
-}
-
-static void dnbUpdate() {
-  if (!dnbReady) return;
-  unsigned long now = millis();
-  uint32_t dt = (uint32_t)(now - dnbLast);
-  dnbLast = now;
-  if (dt > 250) dt = 250;            // never fast-forward after a hitch
-
-  if (!dnbDoneAt) {
-    uint32_t sim = dt * DNB_ACCEL;
-    if (dnbSimMs + sim > DNB_SIM_FULL) sim = DNB_SIM_FULL - dnbSimMs;
-    if (sim) { dnbTick(sim); dnbSimMs += sim; }
-    if (dnbSimMs >= DNB_SIM_FULL || now - dnbLastChange > 15000UL) {
-      dnbDoneAt = now;
-      Serial.println("[DNB] grown");
-    }
-  } else if (now - dnbDoneAt > DNB_HOLD_MS) {
-    dnbStart();
-    return;
-  }
-
-  bool dirty = false;
-  for (int y = 0; y < DNB_H; y++)
-    for (int x = 0; x < DNB_W; x++) {
-      uint8_t s = dnbCell(x, y);
-      int i = y * DNB_W + x;
-      if (s == dnbPrev[i]) continue;
-      dnbPrev[i] = s;
-      dnbBlit(x, y, s);
-      dirty = true;
-      dnbLastChange = now;
-    }
-  if (dnbDoneAt && ((now / 700) & 1UL)) {   // slow blink on the soil when complete
-    lifeSpr.fillRect(0, 60 * DNB_PX - 2, 240, 2, 15);
-    dirty = true;
-  }
-  if (dirty) lifeSpr.pushSprite(0, 0);
-}
 
 // ==== Fire (MODE_FIRE): forest-fire percolation (Drossel-Schwabl) ====
 // Four states in 2 bits/cell: 0 bare ground, 1 tree, 2 burning, 3 ember.
@@ -1155,8 +1061,6 @@ void updateLife();
 void boidInit();
 void updateBoids();
 #if 0
-void antInit();
-void updateAnt();
 #endif
 void bnStart();
 void updateBonsai();
@@ -1208,7 +1112,6 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
       else if (strcmp(anim, "now_playing") == 0) { pendingMode = MODE_NOW_PLAYING; modeDirty = true; }
       else if (strcmp(anim, "boids") == 0)       { pendingMode = MODE_BOIDS;       modeDirty = true; }
       else if (strcmp(anim, "ant") == 0) { pendingMode = MODE_BONSAI; modeDirty = true; }
-      else if (strcmp(anim, "bonsai") == 0 || strcmp(anim, "tree") == 0) { pendingMode = MODE_DBONSAI; modeDirty = true; }
       else if (strcmp(anim, "fire") == 0)        { pendingMode = MODE_FIRE;        modeDirty = true; }
       else if (strcmp(anim, "knight") == 0 || strcmp(anim, "run") == 0 || strcmp(anim, "jump") == 0) { pendingMode = MODE_KNIGHT; modeDirty = true; }
       else if (strcmp(anim, "radar") == 0 || strcmp(anim, "pet") == 0) { pendingMode = MODE_RADAR; modeDirty = true; }
@@ -1586,10 +1489,7 @@ void setDisplayMode(DisplayMode mode, bool remember) {
   } else if (mode == MODE_BOIDS) {
     boidInit();
   } else if (mode == MODE_BONSAI) {
-    bnStart();
-  } else if (mode == MODE_DBONSAI) {
-    dnbStart();
-  } else if (mode == MODE_FIRE) {
+    bnStart();  } else if (mode == MODE_FIRE) {
     fireInit();
   } else if (mode == MODE_KNIGHT) {
     knightInit();
@@ -2136,54 +2036,6 @@ void updateBoids() {
   lifeSpr.pushSprite(0, 0);
 }
 
-#if 0
-// ==== Langton's ant: PARKED with the slot, nothing deleted ====
-static inline bool antGet(int x, int y) {
-  uint32_t idx = (uint32_t)y * LIFE_W + x;
-  return (antGrid[idx >> 3] >> (idx & 7)) & 1;
-}
-
-static inline void antFlip(int x, int y) {
-  uint32_t idx = (uint32_t)y * LIFE_W + x;
-  antGrid[idx >> 3] ^= (uint8_t)(1u << (idx & 7));
-}
-
-
-void antInit() {
-  memset(antGrid, 0, sizeof(antGrid));
-  lifeSpr.fillSprite(0);
-  antX = LIFE_W / 2;
-  antY = LIFE_H / 2;
-  antDir = 0;
-}
-
-void updateAnt() {
-  unsigned long now = millis();
-  if (now - lastAntUpdate < 50) return;
-  lastAntUpdate = now;
-
-  for (int i = 0; i < 5; i++) {            // 5 steps/tick ~= 100 steps/s
-    bool on = antGet(antX, antY);
-    antDir = (antDir + (on ? 1 : 3)) & 3;  // right on filled, left on empty
-    antFlip(antX, antY);
-    // The flipped binary tile state is also the visible two-colour state;
-    // untouched cells remain black. Classic turn rule above is unchanged.
-    lifeSpr.fillRect(antX * LIFE_CELL, antY * LIFE_CELL, LIFE_CELL, LIFE_CELL,
-                     antGet(antX, antY) ? 2 : 1);
-    switch (antDir) {
-      case 0: antY = (antY == 0) ? LIFE_H - 1 : antY - 1; break;
-      case 1: antX = (antX == LIFE_W - 1) ? 0 : antX + 1; break;
-      case 2: antY = (antY == LIFE_H - 1) ? 0 : antY + 1; break;
-      default: antX = (antX == 0) ? LIFE_W - 1 : antX - 1; break;
-    }
-  }
-  // Show the ant itself at the head of its trail (self-corrects next flip).
-  // Accent color so the ant reads apart from its own trail.
-  lifeSpr.fillRect(antX * LIFE_CELL, antY * LIFE_CELL, LIFE_CELL, LIFE_CELL, 2);
-  lifeSpr.pushSprite(0, 0);
-}
-
-#endif
 // ==== Fire (MODE_FIRE) ====
 static inline uint8_t ffGet(const uint8_t* buf, int x, int y) {
   uint32_t bit = ((uint32_t)y * FF_W + x) * 2;
@@ -3232,7 +3084,6 @@ static void modeInteract() {
     case MODE_RADAR:  tamaInteract(); break;
     case MODE_BOIDS:  fishInteract(); break;
     case MODE_BONSAI: bnInteract();   break;
-    case MODE_DBONSAI: dnbInteract(); break;
     case MODE_STATIC: lifeInteract(); break;
     case MODE_KNIGHT: krInteract();   break;
     default: break;                   // Fire, DLA: display only
@@ -3246,7 +3097,6 @@ void renderDisplay() {
     case MODE_NOW_PLAYING: updateNowPlaying(); break;
     case MODE_BOIDS:       updateBoids(); break;
     case MODE_BONSAI:      updateBonsai(); break;
-    case MODE_DBONSAI:     dnbUpdate(); break;
     case MODE_FIRE:        updateFire(); break;
     case MODE_KNIGHT:      updateKnight(); break;
     case MODE_RADAR:       updateTama(); break;

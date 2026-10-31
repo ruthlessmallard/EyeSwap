@@ -87,8 +87,7 @@ connect.
 | **Game of Life** | Conway's Game of Life, 120×120 torus, reseeds when it dies/freezes |
 | **Now Playing** | PLAYING/PAUSED + title + artist card |
 | **Boids** | Flocking sim — "little fish" 🐟 |
-| **Bonsai Wild** | Clockwork colony that builds wood, drops leaves, and dies back |
-| **Bonsai Trained** | Authored skeleton, accreted foliage |
+| **Bonsai Wild** | Builds wood, hangs leaves, drops them and dies back |
 | **Fire** | Doom-style rising flame |
 | **Knight Run** | Self-playing runner — hops hay bales and brick walls, ducks under arrows |
 | **Pet** | Ambient pixel-goo creature; feeds, plays, and tidies itself |
@@ -97,7 +96,7 @@ connect.
 | **Random Cycle** | Auto-rotates through the ambient roster every **10 minutes** |
 
 Random Cycle runs Game of Life, Boids, Fire, Knight Run, Pet, and Crystal.
-Quickdraw, both bonsai builds, and Now Playing are pick-only: they are things
+Quickdraw, Bonsai Wild, and Now Playing are pick-only: they are things
 you choose, not background ambience.
 
 **Two-tone color:** every animation uses a **primary** and an **accent** color.
@@ -211,7 +210,7 @@ BLE UUIDs (must match the Flutter app exactly):
 {"type":"config","brightness_offset":0,"bg_color":"#FFAA00","accent_color":"#0066FF"}
 
 // App → ESP32 animation mode
-//   static | now_playing | boids | ant | bonsai | fire | knight |
+//   static | now_playing | boids | ant | fire | knight |
 //   pet | crystal | eye | cycle
 //   (legacy aliases still accepted: radar, starfield, eq)
 //   ("marquee" is accepted but only runs one indicator pass; it is not a mode)

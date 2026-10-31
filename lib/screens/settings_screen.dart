@@ -58,7 +58,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     {'id': 'static', 'name': 'Game of Life', 'category': 'Living', 'icon': Icons.grain},
     {'id': 'fire', 'name': 'Fire', 'category': 'Living', 'icon': Icons.local_fire_department},
     {'id': 'ant', 'name': 'Bonsai Wild', 'category': 'Living', 'icon': Icons.park},
-    {'id': 'bonsai', 'name': 'Bonsai Trained', 'category': 'Living', 'icon': Icons.forest},
     {'id': 'crystal', 'name': 'Crystal', 'category': 'Living', 'icon': Icons.diamond},
     // --- Utility ---
     {'id': 'now_playing', 'name': 'Now Playing', 'category': 'Utility', 'icon': Icons.music_note},
