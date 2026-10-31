@@ -1492,6 +1492,9 @@ void setDisplayMode(DisplayMode mode, bool remember) {
     displayMode = mode;
     saveDisplaySettings();
   }
+  // Privacy owns the glass. Record the mode and skip the paint; waking
+  // repaints from activeMode.
+  if (privacyOn) return;
   marqueePos = 0;
   lastMarqueeUpdate = 0;
   tft.fillScreen(TFT_BLACK);
@@ -3138,24 +3141,49 @@ void renderDisplay() {
   }
 }
 
+// Bring the glass back to whatever should be showing right now.
+static void resumeDisplay() {
+  if (deviceConnected) {
+    mpWasLinked = true;
+    mpPhase = MP_ANIM;
+    mpSince = millis();
+    setDisplayMode(activeMode);
+  } else {
+    mpWasLinked = false;
+    if (mpPhase != MP_STARTUP) { mpPhase = MP_STARTUP; mpSince = millis(); }
+    setDisplayMode(MODE_INDICATOR);
+  }
+}
+
 void handleButtons() {
   unsigned long now = millis();
 
   bool raw1 = (digitalRead(btns[0].pin) == LOW);
   bool raw3 = (digitalRead(btns[2].pin) == LOW);
 
-  // Privacy combo: 1+3 held together. Both long-press fires are swallowed so
-  // the gesture cannot also skip a track or dial out on the way in.
-  if (!privacyOn && raw1 && raw3 && btns[0].pressed && btns[2].pressed) {
+  // Privacy combo: 1+3 held together blanks the glass, and the same hold
+  // brings it back. Privacy is display-only: the pod keeps running, BLE stays
+  // linked, and every other press still fires its media action blind. Only
+  // the gesture's own two long-press events are swallowed either way.
+  static bool privLatched = false;
+  if (raw1 && raw3 && btns[0].pressed && btns[2].pressed) {
     unsigned long both = btns[0].pressTime > btns[2].pressTime
                              ? btns[0].pressTime : btns[2].pressTime;
-    if (now - both >= PRIVACY_HOLD_MS) {
-      privacyOn = true;
+    if (!privLatched && now - both >= PRIVACY_HOLD_MS) {
+      privLatched = true;
       btns[0].longPressSent = true;
       btns[2].longPressSent = true;
-      tft.fillScreen(TFT_BLACK);
-      Serial.println("[PRIV] display blanked (1+3)");
+      privacyOn = !privacyOn;
+      if (privacyOn) {
+        tft.fillScreen(TFT_BLACK);
+        Serial.println("[PRIV] display blanked (1+3)");
+      } else {
+        resumeDisplay();
+        Serial.println("[PRIV] display restored (1+3)");
+      }
     }
+  } else {
+    privLatched = false;
   }
 
   for (int i=0; i<3; i++) {
@@ -3166,16 +3194,6 @@ void handleButtons() {
       b.pressed = true;
       b.longPressSent = false;
       b.pressTime = now;
-      if (privacyOn) {
-        // Any press wakes the display; it must not also fire its media action.
-        privacyOn = false;
-        b.longPressSent = true;
-        Serial.println("[PRIV] display restored");
-        if (mpPhase == MP_BOOT) setDisplayMode(MODE_BOOT);
-        else if (mpPhase == MP_ANIM) applyChosenMode();
-        else setDisplayMode(MODE_INDICATOR);
-        continue;
-      }
     }
     else if (b.pressed && !raw) {
       if (!b.longPressSent) {

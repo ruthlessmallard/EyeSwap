@@ -119,11 +119,14 @@ short + long press):
 
 ### Privacy Mode
 
-Hold **buttons 1 and 3 together for 1.2 s** and the display blanks to black.
-The long-press actions for both buttons are swallowed, so the gesture cannot
-also skip a track or dial out. Any press after that wakes the display and is
-consumed — the wake press does not fire its media action. Privacy is not
-persisted: a power cycle always comes back with the display on.
+Hold **buttons 1 and 3 together for 1.2 s** and the display blanks to black —
+that is all it does. The pod keeps working normally underneath: BLE stays
+linked, the animations keep running, and every other button press still fires
+its media action, registered blind. Only the gesture's own two long-press
+events are swallowed, so it cannot also skip a track or dial out.
+
+Hold **1+3 again for 1.2 s** to bring the glass back. Privacy is not persisted:
+a power cycle always comes back with the display on.
 
 ### Long Press Actions
 
@@ -199,7 +202,8 @@ pio device monitor -p /dev/ttyUSB0 -b 115200
 ```
 
 **Privacy, clock, boot:**
-- Buttons 1+3 held 1.2 s blank the display; any press wakes it
+- Buttons 1+3 held 1.2 s blank the display as a display-only mute — the pod
+  keeps working blind; another 1+3 hold wakes it
 - App pushes `HH:MM` on connect and every 15 minutes; the Now Playing card
   shows it. No RTC on the pod, so the clock is blank until the first sync
 - Welcome card at power-on (4 s) and a `SEARCHING...` card after a link drop
