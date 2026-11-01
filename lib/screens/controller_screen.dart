@@ -75,6 +75,10 @@ class _ControllerScreenState extends State<ControllerScreen> {
     );
     // resync: stored settings, not a pick -- must not kill Random Cycle.
     await _bleHandler.sendMode(animation, resync: true);
+    // The bare-pod slot is persist-only on a linked pod; it takes effect when
+    // the link drops (or immediately if the pod is already unlinked).
+    final unlinkedAnim = prefs.getString('unlinked_animation') ?? 'marquee';
+    await _bleHandler.sendMode(unlinkedAnim, link: 'unlinked');
 
     // Random Cycle rosters travel with the rest of the settings, so a pod that
     // was reflashed or wiped comes back with the user's lists, not defaults.

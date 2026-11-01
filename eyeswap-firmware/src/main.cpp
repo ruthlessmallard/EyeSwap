@@ -141,6 +141,10 @@ static void cycleBuildRoster() {
 }
 DisplayMode displayMode = MODE_STATIC;   // the user's chosen animation (persisted)
 DisplayMode activeMode  = MODE_INDICATOR; // what is actually on screen right now
+// Disconnected-state animation ("when disconnected" picker in the app): 0 =
+// no explicit choice, so the pod keeps the classic behavior -- searching
+// card, marquee window, then the linked choice. Persisted as NVS "uMode".
+static uint8_t unlinkedMode = 0;
 int brightnessOffset = 0;   // -50..+50, applied as a text brightness scale
 uint8_t baseR = 0xFF, baseG = 0xBF, baseB = 0x00;  // primary: amber default
 uint8_t accR  = 0xFF, accG  = 0xFF, accB  = 0xFF;  // accent: white default
@@ -1098,6 +1102,38 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
     const char* type = doc["type"] | "";
     if (strcmp(type, "mode") == 0) {
       const char* anim = doc["animation"] | "";
+      // Per-link-state animation: {"type":"mode","link":"unlinked",...} sets
+      // what a bare pod runs instead of the default marquee behavior. On a
+      // linked pod this is persist-only -- the linked display owns the screen
+      // and must not change; the choice takes effect on the next disconnect
+      // (or immediately if the pod is already bare).
+      const char* link = doc["link"] | "";
+      if (strcmp(link, "unlinked") == 0) {
+        if (strcmp(anim, "marquee") == 0) {
+          unlinkedMode = 0;
+          prefs.putUChar("uMode", 0);
+          if (!deviceConnected) {          // restore the default indicator behavior
+            mpPhase = MP_STARTUP;
+            mpSince = millis();
+            setDisplayMode(MODE_INDICATOR);
+          }
+          Serial.println("[BLE] unlinked animation -> marquee (default)");
+          return;
+        }
+        const int m = animNameToMode(anim);
+        if (m > 0) {
+          unlinkedMode = (uint8_t)m;
+          prefs.putUChar("uMode", unlinkedMode);
+          if (!deviceConnected) {          // bare pod: switch now
+            cycleEnabled = false;
+            setDisplayMode((DisplayMode)m);
+          }
+          Serial.printf("[BLE] unlinked animation -> %s (%d)\n", anim, m);
+        } else {
+          Serial.printf("[BLE] Unknown unlinked animation '%s'\n", anim);
+        }
+        return;
+      }
       // The app re-pushes its saved idle animation on every connect. That is a
       // resync, not a choice -- it must not knock the pod out of Random Cycle
       // (which is persisted, so it would stay dead across reboots).
@@ -1229,6 +1265,8 @@ void setup() {
         (DisplayMode)prefs.getUChar("mode", (uint8_t)MODE_STATIC);
     if (!modeValid((uint8_t)savedMode)) savedMode = MODE_STATIC;
     displayMode = savedMode;
+    unlinkedMode = prefs.getUChar("uMode", 0);
+    if (unlinkedMode && !modeValid(unlinkedMode)) unlinkedMode = 0;
     cycleMaskLinked   = prefs.getUShort("cycL", CYCLE_DEFAULT_MASK);
     cycleMaskUnlinked = prefs.getUShort("cycU", CYCLE_DEFAULT_MASK);
     cycleBuildRoster();
@@ -1289,7 +1327,8 @@ void loop() {
     }
   }
   marqueeTick();
-  if (cycleEnabled && mpPhase == MP_ANIM && (long)(millis() - cycleNextAt) >= 0) {   // hop to a fresh animation
+  const bool cycleSuppressed = (!deviceConnected && unlinkedMode != 0);
+  if (cycleEnabled && !cycleSuppressed && mpPhase == MP_ANIM && (long)(millis() - cycleNextAt) >= 0) {   // hop to a fresh animation
     int k = cycleIndex;
     while (cycleN > 1 && k == cycleIndex) k = (int)random(cycleN);
     cycleIndex = k;
@@ -1300,7 +1339,7 @@ void loop() {
   // Stall watchdog: cycling must never sit on one animation for good. If the
   // marquee phase machine is wedged (or anything else freezes the hop), force
   // the display back to the animation phase and hop.
-  if (cycleEnabled && (long)(millis() - cycleLastHop) > (long)(2UL * CYCLE_MS)) {
+  if (cycleEnabled && !cycleSuppressed && (long)(millis() - cycleLastHop) > (long)(2UL * CYCLE_MS)) {
     Serial.println("[CYCLE] watchdog: no hop in 20 min, forcing one");
     mpPhase = MP_ANIM;
     mpSince = millis();
@@ -1614,7 +1653,11 @@ static DisplayMode pickRandomAnim() {
 }
 
 static void applyChosenMode() {
-  if (cycleEnabled) {
+  // An explicit "when disconnected" choice outranks Random Cycle while the
+  // pod is bare; the cycle resumes the moment the app links again.
+  if (!deviceConnected && unlinkedMode) {
+    setDisplayMode((DisplayMode)unlinkedMode);
+  } else if (cycleEnabled) {
     setDisplayMode(pickRandomAnim());
     cycleNextAt = millis() + CYCLE_MS;
     cycleLastHop = millis();

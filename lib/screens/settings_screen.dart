@@ -40,6 +40,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Idle animation mode
   String _idleAnimation = 'static'; // firmware ids; marquee is a link indicator, not a mode
 
+  // What a bare (unlinked) pod runs. 'marquee' = firmware default: the link
+  // indicator, then the linked choice after the hold window.
+  String _unlinkedAnimation = 'marquee';
+
   // Random Cycle rosters. Two of them: a linked pod can rotate through
   // Now Playing, a bare pod cannot, so the two sets are chosen separately.
   List<String> _cycleConnected = List.of(BleHandler.defaultCycleRoster);
@@ -85,6 +89,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final savedIdle = prefs.getString('idle_animation');
       final known = _idleAnimations.any((a) => a['id'] == savedIdle);
       _idleAnimation = known ? savedIdle! : 'static';
+      final savedUnlinked = prefs.getString('unlinked_animation');
+      _unlinkedAnimation = (savedUnlinked == null || savedUnlinked.isEmpty)
+          ? 'marquee'
+          : savedUnlinked;
       final savedConn = prefs.getStringList('cycle_connected');
       final savedUnl = prefs.getStringList('cycle_unlinked');
       _cycleConnected = (savedConn == null || savedConn.isEmpty)
@@ -93,7 +101,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _cycleUnlinked = (savedUnl == null || savedUnl.isEmpty)
           ? List.of(BleHandler.defaultCycleRoster)
           : List.of(savedUnl);
-      _brightnessOffset = prefs.getDouble('brightness_offset') ?? 0;
+      // _applySettings stores an int; reading it back as a double throws on
+      // the type mismatch and blanked Settings on the second open.
+      _brightnessOffset = (prefs.getInt('brightness_offset') ?? 0).toDouble();
       final hex = prefs.getString('bg_color') ?? 'FFAA00';
       _selectedColor = Color(int.parse('FF$hex', radix: 16));
       final ahex = prefs.getString('accent_color') ?? 'FFFFFF';
@@ -116,6 +126,91 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       _setStatus('Saved. Connect to EyeSwap to apply.');
     }
+  }
+
+  /// Choose what a bare pod runs. Persisted separately from the while-connected
+  /// choice; the firmware treats this as persist-only while linked.
+  Future<void> _saveUnlinkedAnimation(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('unlinked_animation', id);
+    setState(() {
+      _unlinkedAnimation = id;
+    });
+    final sent = await widget.bleHandler.sendMode(id, link: 'unlinked');
+    if (sent) {
+      _setStatus('Unlinked animation: $id');
+    } else {
+      _setStatus('Saved. Connect to EyeSwap to apply.');
+    }
+  }
+
+  /// Standard presets + a custom entry. The custom tile opens an RGB-slider /
+  /// hex dialog; the picked color rides the same send path as a preset.
+  static const Color _customSlotColor = Color(0xFF37474F);
+
+  bool _isCustom(Color c) =>
+      !_presetColors.any((p) => p['color'] == c);
+
+  Future<void> _pickCustomColor({required bool accent}) async {
+    final initial = accent ? _selectedAccent : _selectedColor;
+    final picked = await showDialog<Color>(
+      context: context,
+      builder: (dialogContext) => _CustomColorDialog(initial: initial),
+    );
+    if (picked == null) return;
+    setState(() {
+      if (accent) {
+        _selectedAccent = picked;
+      } else {
+        _selectedColor = picked;
+      }
+    });
+    _setStatus('Custom color picked - APPLY to send it');
+  }
+
+  Widget _customColorTile({required bool accent}) {
+    final current = accent ? _selectedAccent : _selectedColor;
+    final isCustom = _isCustom(current);
+    return GestureDetector(
+      onTap: () => _pickCustomColor(accent: accent),
+      child: Container(
+        width: 80,
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: isCustom ? current.withOpacity(0.3) : const Color(0xFF1A1A1A),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isCustom ? current : Colors.white24,
+            width: isCustom ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: isCustom ? current : _customSlotColor,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white24, width: 1),
+              ),
+              child: isCustom
+                  ? const SizedBox.shrink()
+                  : const Icon(Icons.colorize, size: 18, color: Colors.white70),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isCustom ? 'CUSTOM' : 'Custom',
+              style: TextStyle(
+                color: isCustom ? Colors.white : Colors.white54,
+                fontSize: 10,
+                fontWeight: isCustom ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Toggle one animation in one roster, persist both, and push to the pod.
@@ -354,23 +449,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 16),
             
-            // Color Presets
+            // Color Presets + Custom
             Wrap(
               spacing: 12,
               runSpacing: 12,
-              children: _presetColors.map((preset) {
-                final isSelected = _selectedColor == preset['color'];
-                return _buildColorButton(
-                  name: preset['name'] as String,
-                  color: preset['color'] as Color,
-                  isSelected: isSelected,
-                  onTap: () {
-                    setState(() {
-                      _selectedColor = preset['color'] as Color;
-                    });
-                  },
-                );
-              }).toList(),
+              children: [
+                ..._presetColors.map((preset) {
+                  final isSelected = _selectedColor == preset['color'];
+                  return _buildColorButton(
+                    name: preset['name'] as String,
+                    color: preset['color'] as Color,
+                    isSelected: isSelected,
+                    onTap: () {
+                      setState(() {
+                        _selectedColor = preset['color'] as Color;
+                      });
+                    },
+                  );
+                }),
+                _customColorTile(accent: false),
+              ],
             ),
             
             const SizedBox(height: 32),
@@ -388,19 +486,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Wrap(
               spacing: 12,
               runSpacing: 12,
-              children: _presetColors.map((preset) {
-                final isSelected = _selectedAccent == preset['color'];
-                return _buildColorButton(
-                  name: preset['name'] as String,
-                  color: preset['color'] as Color,
-                  isSelected: isSelected,
-                  onTap: () {
-                    setState(() {
-                      _selectedAccent = preset['color'] as Color;
-                    });
-                  },
-                );
-              }).toList(),
+              children: [
+                ..._presetColors.map((preset) {
+                  final isSelected = _selectedAccent == preset['color'];
+                  return _buildColorButton(
+                    name: preset['name'] as String,
+                    color: preset['color'] as Color,
+                    isSelected: isSelected,
+                    onTap: () {
+                      setState(() {
+                        _selectedAccent = preset['color'] as Color;
+                      });
+                    },
+                  );
+                }),
+                _customColorTile(accent: true),
+              ],
             ),
             const SizedBox(height: 8),
             Align(
@@ -617,7 +718,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'IDLE ANIMATION',
+                    'ANIMATIONS',
                     style: TextStyle(
                       color: Colors.white70,
                       fontSize: 10,
@@ -626,10 +727,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Display mode when no media playing',
+                    'What the pod runs, chosen per link state.',
                     style: TextStyle(color: Colors.white54, fontSize: 12),
                   ),
                   const SizedBox(height: 12),
+                  const Text(
+                    'WHEN CONNECTED',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 10,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
                   for (final cat in _idleCategories)
                     if (_idleAnimations.any((a) => a['category'] == cat)) ...[
                       Padding(
@@ -679,6 +789,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }).toList(),
                       ),
                     ],
+                  const SizedBox(height: 14),
+                  const Text(
+                    'WHEN DISCONNECTED',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 10,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final anim in _idleAnimations)
+                        if (anim['id'] != 'cycle' && anim['id'] != 'now_playing')
+                          _unlinkedChip(anim),
+                      ChoiceChip(
+                        label: const Text('Marquee (default)'),
+                        selected: _unlinkedAnimation == 'marquee',
+                        onSelected: (_) => _saveUnlinkedAnimation('marquee'),
+                        backgroundColor: const Color(0xFF0A0A0A),
+                        selectedColor: const Color(0xFFFFAA00),
+                        labelStyle: TextStyle(
+                          color: _unlinkedAnimation == 'marquee'
+                              ? Colors.black
+                              : Colors.white,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Runs on a bare pod (app closed or out of range). '
+                    "Marquee keeps the stock 'EYESWAP' link indicator.",
+                    style: TextStyle(color: Colors.white38, fontSize: 10),
+                  ),
                 ],
               ),
             ),
@@ -772,6 +920,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _unlinkedChip(Map<String, dynamic> anim) {
+    final id = anim['id'] as String;
+    final isSelected = _unlinkedAnimation == id;
+    return ChoiceChip(
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            anim['icon'] as IconData,
+            size: 16,
+            color: isSelected ? Colors.black : Colors.white54,
+          ),
+          const SizedBox(width: 6),
+          Text(anim['name'] as String),
+        ],
+      ),
+      selected: isSelected,
+      onSelected: (_) => _saveUnlinkedAnimation(id),
+      backgroundColor: const Color(0xFF0A0A0A),
+      selectedColor: const Color(0xFFFFAA00),
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.black : Colors.white,
+        fontSize: 12,
+      ),
+    );
+  }
+
   Widget _buildSectionTitle(String title) {
     return Text(
       title.toUpperCase(),
@@ -829,6 +1004,121 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// RGB sliders + hex entry + live preview. Returns the picked [Color] on
+/// save, null on dismiss. No packages: the pod's parser takes #RRGGBB, so the
+/// hex field is the source of truth and the sliders drive it.
+class _CustomColorDialog extends StatefulWidget {
+  const _CustomColorDialog({required this.initial});
+  final Color initial;
+
+  @override
+  State<_CustomColorDialog> createState() => _CustomColorDialogState();
+}
+
+class _CustomColorDialogState extends State<_CustomColorDialog> {
+  late int _r = widget.initial.red;
+  late int _g = widget.initial.green;
+  late int _b = widget.initial.blue;
+  late final TextEditingController _hex =
+      TextEditingController(text: _hexText());
+  bool _updatingHex = false;
+
+  String _hexText() => '${_r.toRadixString(16).padLeft(2, '0')}'
+      '${_g.toRadixString(16).padLeft(2, '0')}'
+      '${_b.toRadixString(16).padLeft(2, '0')}';
+
+  void _fromSliders() {
+    _updatingHex = true;
+    _hex.text = _hexText();
+    _updatingHex = false;
+  }
+
+  void _fromHex(String v) {
+    if (_updatingHex) return;
+    final clean = v.replaceAll('#', '').trim();
+    if (clean.length == 6 && int.tryParse(clean, radix: 16) != null) {
+      final n = int.parse(clean, radix: 16);
+      setState(() {
+        _r = (n >> 16) & 0xFF;
+        _g = (n >> 8) & 0xFF;
+        _b = n & 0xFF;
+      });
+    }
+  }
+
+  Color get _color => Color.fromARGB(255, _r, _g, _b);
+
+  Slider _channel(String label, int value, ValueChanged<double> onChanged) {
+    return Slider(
+      value: value.toDouble(),
+      min: 0,
+      max: 255,
+      label: '$value',
+      activeColor: label == 'R'
+          ? const Color(0xFFE53935)
+          : label == 'G'
+              ? const Color(0xFF43A047)
+              : const Color(0xFF1E88E5),
+      onChanged: onChanged,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1A1A1A),
+      title: const Text('Custom color',
+          style: TextStyle(color: Colors.white, fontSize: 16)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: _color,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white24),
+            ),
+          ),
+          const SizedBox(height: 16),
+          _channel('R', _r, (v) => setState(() { _r = v.round(); _fromSliders(); })),
+          _channel('G', _g, (v) => setState(() { _g = v.round(); _fromSliders(); })),
+          _channel('B', _b, (v) => setState(() { _b = v.round(); _fromSliders(); })),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _hex,
+            onChanged: _fromHex,
+            maxLength: 7,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              prefixText: '#',
+              prefixStyle: TextStyle(color: Colors.white54),
+              hintText: 'RRGGBB',
+              counterText: '',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('CANCEL'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFFFAA00),
+            foregroundColor: Colors.black,
+          ),
+          onPressed: () => Navigator.pop(context, _color),
+          child: const Text('USE THIS COLOR'),
+        ),
+      ],
     );
   }
 }

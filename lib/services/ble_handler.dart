@@ -240,7 +240,8 @@ class BleHandler {
   /// Push idle-animation mode to the ESP32 (config characteristic, JSON).
   /// [resync] marks a re-push of stored settings on connect (not a user pick),
   /// so the pod does not drop out of Random Cycle because we reminded it.
-  Future<bool> sendMode(String animation, {bool resync = false}) async {
+  Future<bool> sendMode(String animation,
+      {bool resync = false, String? link}) async {
     final characteristic = _configCharacteristic;
     if (characteristic == null) return false;
 
@@ -249,6 +250,7 @@ class BleHandler {
         'type': 'mode',
         'animation': animation,
         if (resync) 'resync': true,
+        if (link != null) 'link': link,
       });
       await characteristic.write(utf8.encode(packet), withoutResponse: true);
       return true;
